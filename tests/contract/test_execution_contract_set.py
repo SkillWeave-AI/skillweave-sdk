@@ -18,6 +18,7 @@ claim that schema validation alone provides runtime authentication.
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -810,19 +811,34 @@ class TestExecutionRegistry:
 
 @pytest.fixture(scope="session")
 def installed_wheel(tmp_path_factory):
-    """Build the wheel, install it into an isolated target, and load *that*.
+    """Build the wheel from a pristine copy, install it, and load *that*.
 
     A ``PYTHONPATH=src`` test passes even when the wheel omits the nested
     ``execution/`` schemas, because the source tree is present on disk. This
     fixture closes that gap by packaging and installing for real, then importing
     the installed copy in a subprocess with ``PYTHONPATH`` pointed only at the
     installed target (and every other copy removed from ``sys.path``).
+
+    The build runs against a **staged copy** assembled from the tracked package
+    sources, never against ``ROOT`` in place. Building in place leaves a
+    ``build/lib`` tree behind, and setuptools reuses it on the next build even
+    after a package-data glob is removed — which would let a stale artefact
+    satisfy the packaging assertions on a dirty developer tree. Staging the
+    sources guarantees the test exercises the *current* ``pyproject.toml``
+    package-data declaration every run.
     """
+    staging = tmp_path_factory.mktemp("stage")
+    shutil.copy2(ROOT / "pyproject.toml", staging / "pyproject.toml")
+    shutil.copy2(ROOT / "README.md", staging / "README.md")
+    shutil.copy2(ROOT / "LICENSE", staging / "LICENSE")
+    shutil.copytree(ROOT / "src" / "skillweave_sdk",
+                    staging / "src" / "skillweave_sdk")
+
     outdir = tmp_path_factory.mktemp("wheel")
     build = subprocess.run(
         [sys.executable, "-m", "build", "--wheel", "--no-isolation",
          "--outdir", str(outdir)],
-        cwd=str(ROOT), capture_output=True, text=True,
+        cwd=str(staging), capture_output=True, text=True,
     )
     if build.returncode != 0:
         # The build step is a hard requirement: skipping on its absence would
