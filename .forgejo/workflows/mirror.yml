@@ -1,12 +1,7 @@
 name: Mirror to GitHub
 
-# Forgejo is canonical; GitHub (LangeVC/skillweave-sdk) is the public read-only
-# mirror. Force-push exactly the ref that triggered the run.
-#
-# exact-ref Muster (LVC-MIR-G0, 2026-07-28), identisch zum Core-Repo.
-# Important for the initial fill: an empty repository can only be populated
-# through a real ref. The first push to main has to create a main on GitHub, and
-# the exact-ref pattern does that because it mirrors the triggering ref back.
+# Forgejo is canonical; GitHub (SkillWeave-AI/skillweave-sdk) is the public
+# read-only mirror. Force-push exactly the ref that triggered the run.
 
 on:
   push:
@@ -25,10 +20,40 @@ jobs:
       - uses: https://github.com/actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Preflight — prove destination before any push
+        env:
+          GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          GH_REPO: "SkillWeave-AI/skillweave-sdk"
+          GH_EXPECTED_VISIBILITY: "public"
+          GH_EXPECTED_REPOSITORY_ID: "1331291180"
+        run: |
+          set -euo pipefail
+          python3 - "${GH_REPO}" "${GH_MIRROR_TOKEN:-}" "${GH_EXPECTED_VISIBILITY:-}" "${GH_EXPECTED_REPOSITORY_ID:-}" <<'PROVE_PY'
+          import asyncio, os, sys
+          from ops_engine.modules.mirror import MirrorHandler, MirrorDestinationError
+
+          async def main():
+              destination = sys.argv[1]
+              token = sys.argv[2] if sys.argv[2] else None
+              visibility = sys.argv[3] if sys.argv[3] else None
+              repo_id_str = sys.argv[4]
+              repo_id = int(repo_id_str) if repo_id_str else None
+              try:
+                  await MirrorHandler.prove_destination(
+                      destination, token=token,
+                      expected_visibility=visibility,
+                      expected_repository_id=repo_id,
+                  )
+              except MirrorDestinationError as exc:
+                  print(f"::error::preflight: {exc}", file=sys.stderr)
+                  sys.exit(1)
+          asyncio.run(main())
+          PROVE_PY
+          echo "preflight: ${GH_REPO} verified."
       - name: Push to GitHub mirror
         env:
           GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
           MIRROR_REF: ${{ inputs.ref || github.ref }}
         run: |
-          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/LangeVC/skillweave-sdk.git"
+          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/SkillWeave-AI/skillweave-sdk.git"
           git push --force "$remote" "+${MIRROR_REF}:${MIRROR_REF}"
