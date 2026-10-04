@@ -80,7 +80,7 @@ EXECUTION_SCHEMA_FILENAMES = (
 # schema, concatenated in sorted-identity order. It changes iff the
 # byte set changes. Covers both the flat core/lifecycle schemas and the nested
 # execution contract set.
-EXPECTED_SCHEMA_DIGEST = "216e5f17057a3ae2a01da41d0493dced60eaceaf330bed913bd3f281dbc164d5"
+EXPECTED_SCHEMA_DIGEST = "6fc637a329e359d9d8f690f469840e4758c1d7d3804b65e84910cc6a3fed3438"
 
 
 class SchemaDigestError(Exception):

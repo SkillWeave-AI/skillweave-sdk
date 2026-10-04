@@ -38,10 +38,11 @@ though both live in the SDK schema tree so they can be validated as one set.
 
 1. **Reviewed schema, one named owner, immutable digest, producer/consumer/
    migration per contract.** Proven by `tests/contract/test_execution_contract_set.py`
-   (`TestContractSetShape`) against `contract/execution-catalog.json`, whose
-   per-schema `digest_sha256` values are recomputed from the actual schema bytes
-   in the test. Ownership metadata lives in `schema_version.toml`
-   `[execution.schemas]`.
+   (`TestContractSetShape`) against the frozen inventory embedded as a `const`
+   in `contract-catalog-v1.schema.json` and authored in `schema_version.toml`
+   `[execution.schemas]`. Each per-contract `immutable_digest_sha256` is
+   recomputed from the actual schema bytes in the test, so a silent byte change
+   fails.
 2. **Unknown versions and missing required ids fail closed; methodology,
    autonomy policy and session schedule are distinct.** Proven by
    `TestFailClosedVersion`, `TestMissingIdsFailClosed` and
@@ -71,13 +72,15 @@ explicit and tested; it never silently weakens authority. See
 
 ## Catalogue provenance
 
-`contract/execution-catalog.json` records two distinct revisions:
+The frozen inventory (`schema_version.toml` `[execution.schemas]`, mirrored as a
+`const` in `contract-catalog-v1.schema.json`) records one baseline/source
+revision and deliberately omits an integration revision:
 
-- `baseline_commit` — the source revision the frozen schemas were authored
-  against.
-- `integration_commit` — the revision at which the enclosing change is
-  integrated. This is resolved by the integration step, which alone can record
-  it without self-reference; it is never this file's own commit's SHA.
+- `baseline_revision` — the already-existing source revision the frozen schemas
+  were authored against.
+- The integration revision is **not** recorded here. The integration step alone
+  can record it without self-reference; embedding it would make the catalog
+  depend on an unknowable future commit's SHA, so it is resolved externally.
 
 The catalog instance is itself validated against `contract-catalog-v1` by
 `test_catalog_instance_validates_against_its_schema`.

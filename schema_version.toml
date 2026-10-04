@@ -44,18 +44,35 @@ version = "1.0.0"
 directory = "src/skillweave_sdk/schemas/execution"
 digest_algorithm = "sha256"
 catalog = "src/skillweave_sdk/schemas/execution/contract-catalog-v1.schema.json"
+# Baseline/source revision the frozen contract bytes were authored against. A
+# real, already-existing commit. This is NOT the candidate's own commit and NOT
+# an integration revision: the integration step records the integration SHA
+# externally, so the catalog never self-references an unknowable commit.
+baseline_revision = "4174fe3f00558d0b5af6edffc44e1d09f553d8b9"
+legacy_adapter = "skillweave_sdk.validator.adapt_legacy_execution_envelope"
+
+[execution.owners]
+# Explicit ownership map: shared execution contracts use SDK authority, while
+# existing Core/ops-engine ownership is preserved rather than silently moved.
+sdk = "skillweave-sdk"
+core = "skillweave Core"
+ops_engine = "ops-engine"
+router = "faigate"
+observer = "gate/observer"
 
 [execution.schemas]
-# One named owner per contract. Shared execution contracts use SDK authority;
-# existing Core/ops-engine surfaces are preserved explicitly.
-run-snapshot = { path = "src/skillweave_sdk/schemas/execution/run-snapshot-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; legacy run readers adapt explicitly" }
-attempt-event = { path = "src/skillweave_sdk/schemas/execution/attempt-event-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; legacy journals adapt explicitly" }
-evidence-receipt = { path = "src/skillweave_sdk/schemas/execution/evidence-receipt-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; legacy evidence records adapt explicitly" }
-execution-envelope = { path = "src/skillweave_sdk/schemas/execution/execution-envelope-v1.schema.json", owner = "sdk", migration = "explicit legacy flat-envelope adapter emits observe_adapt policy" }
-reservation = { path = "src/skillweave_sdk/schemas/execution/reservation-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; the single admission ledger stays authoritative" }
-route-decision = { path = "src/skillweave_sdk/schemas/execution/route-decision-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; router keeps emitting decisions, SDK only freezes the record" }
-capability-snapshot = { path = "src/skillweave_sdk/schemas/execution/capability-snapshot-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; measuring service keeps ownership" }
-agent-message = { path = "src/skillweave_sdk/schemas/execution/agent-message-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; mailbox service keeps delivery authority" }
-mirror-target = { path = "src/skillweave_sdk/schemas/execution/mirror-target-v1.schema.json", owner = "ops_engine", migration = "ops-engine keeps release/mirror machinery; SDK freezes the wire record" }
-contract-catalog = { path = "src/skillweave_sdk/schemas/execution/contract-catalog-v1.schema.json", owner = "sdk", migration = "index of the frozen set; does not index itself" }
-contract-catalog-record = { path = "src/skillweave_sdk/schemas/execution/contract-catalog-record-v1.schema.json", owner = "router", migration = "publishes the existing router-owned catalog surface; ownership does not transfer" }
+# One named owner, immutable digest, producer, consumers and migration per
+# contract. This table is the authoritative frozen inventory: it carries the
+# full per-contract metadata *and* the exact schema bytes' sha256, so a contract
+# cannot be renamed, re-owned or silently changed without a visible diff here.
+run-snapshot = { path = "src/skillweave_sdk/schemas/execution/run-snapshot-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/run-snapshot/v1", immutable_digest_sha256 = "0ee3b20608a956ad9088c53880c7920ff0053691f2a8ed3c327588bb2b9bf7e8", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "new opt-in v1 namespace; explicit legacy adapter" }
+attempt-event = { path = "src/skillweave_sdk/schemas/execution/attempt-event-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/attempt-event/v1", immutable_digest_sha256 = "fb221a0e051b49c399c304dad57f1882eb71ae481d63f543d5ee6cb963d6473c", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "new opt-in v1 namespace; explicit legacy adapter" }
+evidence-receipt = { path = "src/skillweave_sdk/schemas/execution/evidence-receipt-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/evidence-receipt/v1", immutable_digest_sha256 = "af6e6196a0a5d4841ef3dcfb2ed49b48e249a36a1be7099ce38002fa6149f1b8", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "new opt-in v1 namespace; explicit legacy adapter" }
+execution-envelope = { path = "src/skillweave_sdk/schemas/execution/execution-envelope-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/execution-envelope/v1", immutable_digest_sha256 = "e3e07570727e5785f4d3f1f142ca1ee0a1d92eb6681475a6f702cb8c431bba54", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "explicit legacy flat-envelope adapter emits observe_adapt policy" }
+reservation = { path = "src/skillweave_sdk/schemas/execution/reservation-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/reservation/v1", immutable_digest_sha256 = "fc311c7a7ef7b26a8ec4477d7a26dbc14033c1612da70b0791e2b62aca345005", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "new opt-in v1 namespace; the single admission ledger stays authoritative" }
+route-decision = { path = "src/skillweave_sdk/schemas/execution/route-decision-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/route-decision/v1", immutable_digest_sha256 = "12a7314d4fccb2685479477425410f76bde16cef171cb635c1413574174230eb", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "new opt-in v1 namespace; router keeps emitting decisions, SDK only freezes the record" }
+capability-snapshot = { path = "src/skillweave_sdk/schemas/execution/capability-snapshot-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/capability-snapshot/v1", immutable_digest_sha256 = "d2429589b091a287bb5a7d80c78c77b3f6915e14f2c906cd2bd9192a21829d81", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "new opt-in v1 namespace; measuring service keeps ownership" }
+agent-message = { path = "src/skillweave_sdk/schemas/execution/agent-message-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/agent-message/v1", immutable_digest_sha256 = "247c971ec76b52d0fe83062e7b051846e5a0d8cb516fbe257045a766a299f44f", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "new opt-in v1 namespace; mailbox service keeps delivery authority" }
+mirror-target = { path = "src/skillweave_sdk/schemas/execution/mirror-target-v1.schema.json", owner = "ops_engine", schema_id = "https://skillweave.dev/schemas/execution/mirror-target/v1", immutable_digest_sha256 = "0d922d65d8f825668e2f5a19986753ebf5f36bd7e5ae4e977cbaa29648f47af1", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "ops-engine keeps release/mirror machinery; SDK freezes the wire record" }
+contract-catalog = { path = "src/skillweave_sdk/schemas/execution/contract-catalog-v1.schema.json", owner = "sdk", schema_id = "https://skillweave.dev/schemas/execution/contract-catalog/v1", immutable_digest_sha256 = "0a22ded446b617b419abb71d23578c044323f0ad0469d1f4f420ec86fa668d62", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "index of the frozen set; does not index itself" }
+contract-catalog-record = { path = "src/skillweave_sdk/schemas/execution/contract-catalog-record-v1.schema.json", owner = "router", schema_id = "https://skillweave.dev/schemas/execution/contract-catalog-record/v1", immutable_digest_sha256 = "b0e77bf177cf7d2eeeee4bedebfbeadf8e039ecb5ef89906917604cea7848e0d", producer = "sdk contract freeze", consumers = ["cli", "mcp", "observer"], migration = "publishes the existing router-owned catalog surface; ownership does not transfer" }
