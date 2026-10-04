@@ -20,6 +20,29 @@ jobs:
       - uses: https://github.com/actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Dependency check — pinned ops-engine must be importable
+        run: |
+          set -euo pipefail
+          python3 - <<'DEP_PY'
+          import importlib.metadata as md, sys
+          REQUIRED = "3.4.2"
+          try:
+              got = md.version("ops-engine")
+          except md.PackageNotFoundError:
+              print("::error::ops-engine is NOT INSTALLED. "
+                    "The preflight guard requires ops-engine v{} which is "
+                    "a shared-engine dependency outside this workflow. "
+                    "Install it in the runner image or via CI setup.".format(REQUIRED), file=sys.stderr)
+              sys.exit(1)
+          if got != REQUIRED:
+              print("::error::ops-engine version mismatch: installed {}, required {}. "
+                    "The preflight guard requires exactly the pinned version.".format(got, REQUIRED), file=sys.stderr)
+              sys.exit(1)
+          from ops_engine.modules.mirror import MirrorHandler, MirrorDestinationError
+          print("dependency check: ops-engine {} OK, MirrorHandler importable".format(got))
+          DEP_PY
+
+
       - name: Preflight — prove destination before any push
         env:
           GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
