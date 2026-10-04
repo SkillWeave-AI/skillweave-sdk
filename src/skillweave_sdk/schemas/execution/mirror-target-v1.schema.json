@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/mirror-target/v1",
+  "title": "Mirror Target v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Wire record for one repository mirror transfer. ops-engine owns the generic release/mirror machinery and SkillWeave ops owns the org configuration; this schema is the reviewed wire contract they exchange, not a replacement for either. visibility is an explicit enum so a private-to-public change is a validation failure.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "source_forge", "source_owner", "source_repo",
+    "old_destination", "new_destination", "visibility", "role",
+    "names_unchanged", "source_refs_digest", "authority_evidence_digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "source_forge": { "type": "string", "minLength": 1 },
+    "source_owner": { "type": "string", "minLength": 1 },
+    "source_repo": { "type": "string", "minLength": 1 },
+    "old_destination": { "type": "string", "minLength": 1 },
+    "new_destination": { "type": "string", "minLength": 1 },
+    "visibility": { "enum": ["public", "internal", "private"], "description": "Visibility of the existing source; the transfer preserves it." },
+    "role": { "enum": ["canonical", "mirror"], "description": "Role of the repository in the topology." },
+    "names_unchanged": { "const": true, "description": "Transfer keeps repository names unchanged. A name change is a different, unauthorized operation." },
+    "source_refs_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "authority_evidence_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Digest of the owner authorization permitting this repository transfer." }
+  }
+}

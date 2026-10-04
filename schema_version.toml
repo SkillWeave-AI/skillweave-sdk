@@ -33,3 +33,29 @@ subject-ref = "src/skillweave_sdk/schemas/subject-ref.schema.json"
 # The taxonomy value set lives as a schema enum. This section records where. A
 # validator needs only that value set, never core access.
 run-state-vocabulary = "src/skillweave_sdk/schemas/run-state.schema.json#/properties/state/enum"
+
+[execution]
+# The frozen execution contract set (SW-1510-CONTRACT). SDK authority surface
+# for the integrated run/attempt/evidence/routing contracts; Core, ops-engine
+# and the router keep their own runtime ownership and consume these through the
+# SDK. The frozen digest of the whole contract set (flat + execution) is
+# embedded in skillweave_sdk.validator.EXPECTED_SCHEMA_DIGEST.
+version = "1.0.0"
+directory = "src/skillweave_sdk/schemas/execution"
+digest_algorithm = "sha256"
+catalog = "src/skillweave_sdk/schemas/execution/contract-catalog-v1.schema.json"
+
+[execution.schemas]
+# One named owner per contract. Shared execution contracts use SDK authority;
+# existing Core/ops-engine surfaces are preserved explicitly.
+run-snapshot = { path = "src/skillweave_sdk/schemas/execution/run-snapshot-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; legacy run readers adapt explicitly" }
+attempt-event = { path = "src/skillweave_sdk/schemas/execution/attempt-event-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; legacy journals adapt explicitly" }
+evidence-receipt = { path = "src/skillweave_sdk/schemas/execution/evidence-receipt-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; legacy evidence records adapt explicitly" }
+execution-envelope = { path = "src/skillweave_sdk/schemas/execution/execution-envelope-v1.schema.json", owner = "sdk", migration = "explicit legacy flat-envelope adapter emits observe_adapt policy" }
+reservation = { path = "src/skillweave_sdk/schemas/execution/reservation-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; the single admission ledger stays authoritative" }
+route-decision = { path = "src/skillweave_sdk/schemas/execution/route-decision-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; router keeps emitting decisions, SDK only freezes the record" }
+capability-snapshot = { path = "src/skillweave_sdk/schemas/execution/capability-snapshot-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; measuring service keeps ownership" }
+agent-message = { path = "src/skillweave_sdk/schemas/execution/agent-message-v1.schema.json", owner = "sdk", migration = "new opt-in v1 namespace; mailbox service keeps delivery authority" }
+mirror-target = { path = "src/skillweave_sdk/schemas/execution/mirror-target-v1.schema.json", owner = "ops_engine", migration = "ops-engine keeps release/mirror machinery; SDK freezes the wire record" }
+contract-catalog = { path = "src/skillweave_sdk/schemas/execution/contract-catalog-v1.schema.json", owner = "sdk", migration = "index of the frozen set; does not index itself" }
+contract-catalog-record = { path = "src/skillweave_sdk/schemas/execution/contract-catalog-record-v1.schema.json", owner = "router", migration = "publishes the existing router-owned catalog surface; ownership does not transfer" }

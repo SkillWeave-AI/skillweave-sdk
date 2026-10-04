@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/capability-snapshot/v1",
+  "title": "Capability Snapshot v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Time-bounded, collector-measured capability record for a route or harness. A snapshot is valid only within [measured_at, expires_at]; an expired or absent snapshot means unknown capacity, which is never treated as unlimited. Readiness and limits come from the measuring service.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "snapshot_id", "revision", "measured_at", "expires_at",
+    "subject", "capabilities", "evidence_level", "limits", "readiness", "issuer"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "snapshot_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "revision": { "type": "string", "minLength": 1 },
+    "measured_at": { "type": "string", "minLength": 1, "format": "date-time" },
+    "expires_at": { "type": "string", "minLength": 1, "format": "date-time", "description": "After this instant the snapshot is stale and must be re-measured." },
+    "subject": { "type": "string", "minLength": 1 },
+    "capabilities": { "type": "object", "description": "Measured capabilities. Unknown is not the same as supported." },
+    "evidence_level": { "type": "string", "minLength": 1, "description": "How the snapshot was established; a bare installation is not a capability measurement." },
+    "limits": { "type": "object", "description": "Limits observed by the measuring service; unknown limits are recorded as unknown, not unlimited." },
+    "readiness": { "type": "string", "minLength": 1 },
+    "issuer": { "type": "string", "minLength": 1, "description": "Authenticated measuring service; not a model-authored claim." }
+  }
+}

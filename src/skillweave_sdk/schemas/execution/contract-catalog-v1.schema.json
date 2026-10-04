@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/contract-catalog/v1",
+  "title": "Contract Catalog v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). The SDK-owned index of the frozen execution contract set. Each entry names exactly one owner and an immutable sha256 digest of the exact schema bytes, with an explicit producer, consumers and migration route. The catalog does not index itself: self-reference would make its digest depend on its own bytes. The ops-engine-owned router surface is published through the separate contract-catalog-record-v1 contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "catalog_revision", "sdk_version", "sdk_commit",
+    "schema_directory", "digest_algorithm", "schema_digests", "owners", "compatibility"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "catalog_revision": { "type": "string", "minLength": 1 },
+    "sdk_version": { "type": "string", "minLength": 1, "description": "SDK version this catalog belongs to; equals schema_version.toml [schema].version." },
+    "sdk_commit": { "type": "string", "minLength": 1 },
+    "schema_directory": { "type": "string", "const": "src/skillweave_sdk/schemas/execution" },
+    "digest_algorithm": { "type": "string", "const": "sha256" },
+    "schema_digests": {
+      "type": "array", "minItems": 10,
+      "items": { "$ref": "#/$defs/contract_entry" }
+    },
+    "owners": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sdk", "core", "ops_engine", "router", "observer"],
+      "properties": {
+        "sdk": { "type": "string", "minLength": 1 },
+        "core": { "type": "string", "minLength": 1 },
+        "ops_engine": { "type": "string", "minLength": 1 },
+        "router": { "type": "string", "minLength": 1 },
+        "observer": { "type": "string", "minLength": 1 }
+      },
+      "description": "Explicit ownership map preserving existing Core/ops-engine ownership instead of silently reassigning it."
+    },
+    "compatibility": { "type": "object" }
+  },
+  "$defs": {
+    "contract_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "schema_id", "path", "digest_sha256", "owner", "status", "producer", "consumers", "migration"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "schema_id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "digest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Immutable digest of the exact schema bytes." },
+        "owner": { "type": "string", "minLength": 1, "description": "Exactly one named owner for this contract." },
+        "status": { "enum": ["frozen", "proposed"] },
+        "producer": { "type": "string", "minLength": 1 },
+        "consumers": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "migration": { "type": "string", "minLength": 1, "description": "Explicit migration note, including the legacy adapter where one exists." }
+      }
+    }
+  }
+}
