@@ -6,14 +6,16 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version", "catalog_revision", "sdk_version", "sdk_commit",
-    "schema_directory", "digest_algorithm", "schema_digests", "owners", "compatibility"
+    "schema_version", "catalog_revision", "sdk_version", "baseline_commit",
+    "integration_commit", "schema_directory", "digest_algorithm",
+    "schema_digests", "owners", "compatibility"
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
     "catalog_revision": { "type": "string", "minLength": 1 },
     "sdk_version": { "type": "string", "minLength": 1, "description": "SDK version this catalog belongs to; equals schema_version.toml [schema].version." },
-    "sdk_commit": { "type": "string", "minLength": 1 },
+    "baseline_commit": { "type": "string", "pattern": "^[a-f0-9]{40}$", "description": "The source revision the frozen execution contract schemas were authored against. A real, already-existing commit — never this catalog's own commit." },
+    "integration_commit": { "type": "string", "pattern": "^[a-f0-9]{40}$", "description": "The revision at which the enclosing contract-set change is integrated. Recorded by the integration step, which alone can resolve it without self-reference; until then it points at the baseline commit, never at this commit's own (unknowable) SHA." },
     "schema_directory": { "type": "string", "const": "src/skillweave_sdk/schemas/execution" },
     "digest_algorithm": { "type": "string", "const": "sha256" },
     "schema_digests": {

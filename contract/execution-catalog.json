@@ -2,7 +2,8 @@
   "schema_version": "1.0.0",
   "catalog_revision": "1",
   "sdk_version": "0.2.0",
-  "sdk_commit": "4174fe3f00558d0b5af6edffc44e1d09f553d8b9",
+  "baseline_commit": "fe6181217eff6044b8f831af3a303a10c6efbb0d",
+  "integration_commit": "fe6181217eff6044b8f831af3a303a10c6efbb0d",
   "schema_directory": "src/skillweave_sdk/schemas/execution",
   "digest_algorithm": "sha256",
   "schema_digests": [
@@ -55,7 +56,7 @@
       "name": "execution-envelope-v1",
       "schema_id": "https://skillweave.dev/schemas/execution/execution-envelope/v1",
       "path": "execution-envelope-v1.schema.json",
-      "digest_sha256": "b0b2d4e5f740661a57997ad2ee6098a4d2c7d53cea94bd56a47fcda302db3045",
+      "digest_sha256": "e3e07570727e5785f4d3f1f142ca1ee0a1d92eb6681475a6f702cb8c431bba54",
       "owner": "sdk",
       "status": "frozen",
       "producer": "sdk contract freeze",
@@ -166,6 +167,6 @@
   },
   "compatibility": {
     "legacy_adapter": "skillweave_sdk.validator.adapt_legacy_execution_envelope",
-    "note": "flat pre-SW-1510 envelopes adapt explicitly to observe_adapt policy"
+    "note": "flat pre-SW-1510 envelopes adapt explicitly: an unbounded envelope becomes observe_adapt; a finite legacy ceiling/deadline is preserved as an explicit enforcing policy, never silently widened, and one that cannot be represented soundly is rejected"
   }
 }

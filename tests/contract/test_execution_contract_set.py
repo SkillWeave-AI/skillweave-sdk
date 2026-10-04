@@ -18,13 +18,20 @@ claim that schema validation alone provides runtime authentication.
 
 import hashlib
 import json
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from skillweave_sdk.validator import (
+    EXPECTED_SCHEMA_DIGEST,
+    EXECUTION_SCHEMA_FILENAMES,
+    SCHEMA_FILENAMES,
     AuthorityBoundaryError,
     AuthenticatedServiceContext,
+    LegacyMigrationError,
     UnsupportedSchemaVersionError,
     adapt_legacy_execution_envelope,
     canonical_digest,
@@ -82,6 +89,31 @@ def _validate(name: str, instance: dict) -> list[str]:
 
 
 def _observe_envelope():
+    # An honest observe_adapt envelope: no cumulative ceiling and no invented
+    # future deadline. deadline_utc is null ("no deadline") and counters are
+    # omitted rather than filled with fake maxima.
+    return {
+        "schema_version": "1.0.0",
+        "envelope_id": "env-1",
+        "authorized_principal": "owner",
+        "subject_digest": DIGEST,
+        "brief_digest": DIGEST,
+        "scope": {},
+        "deadline_utc": None,
+        "limit_policy": {
+            "policy": "observe_adapt",
+            "max_request_bytes": 100,
+            "max_output_tokens": 100,
+            "max_inflight_requests": 2,
+            "max_parallel_lanes": 2,
+        },
+        "allowed_routes": ["byteplus/deepseek-v4.1-flash"],
+        "irreversible_actions": [],
+        "authority_evidence_digest": DIGEST,
+    }
+
+
+def _enforcing_envelope():
     return {
         "schema_version": "1.0.0",
         "envelope_id": "env-1",
@@ -91,36 +123,23 @@ def _observe_envelope():
         "scope": {},
         "deadline_utc": "2026-12-31T00:00:00Z",
         "limit_policy": {
-            "policy": "observe_adapt",
+            "policy": "enforcing",
             "max_request_bytes": 100,
             "max_output_tokens": 100,
             "max_inflight_requests": 2,
             "max_parallel_lanes": 2,
             "counters": {"max_requests": 10, "max_reserved_tokens": 100},
+            "enforcement": {
+                "max_requests": 10,
+                "max_reserved_tokens": 100,
+                "max_correction_rounds": 1,
+                "deadline": True,
+            },
         },
         "allowed_routes": ["byteplus/deepseek-v4.1-flash"],
         "irreversible_actions": [],
         "authority_evidence_digest": DIGEST,
     }
-
-
-def _enforcing_envelope():
-    env = _observe_envelope()
-    env["limit_policy"] = {
-        "policy": "enforcing",
-        "max_request_bytes": 100,
-        "max_output_tokens": 100,
-        "max_inflight_requests": 2,
-        "max_parallel_lanes": 2,
-        "counters": {"max_requests": 10, "max_reserved_tokens": 100},
-        "enforcement": {
-            "max_requests": 10,
-            "max_reserved_tokens": 100,
-            "max_correction_rounds": 1,
-            "deadline": True,
-        },
-    }
-    return env
 
 
 def _valid(name: str) -> dict:
@@ -471,10 +490,35 @@ class TestEnvelopeLimits:
         )["properties"]["limit_policy"]["oneOf"][0]["properties"]
         assert "enforcement" not in policy
 
+    def test_observe_adapt_accepts_null_deadline(self):
+        instance = _valid("execution-envelope")
+        instance["deadline_utc"] = None
+        assert _validate("execution-envelope", instance) == []
+
+    def test_observe_adapt_requires_no_invented_cumulative_maximum(self):
+        instance = _valid("execution-envelope")
+        assert "counters" not in instance["limit_policy"]
+        assert _validate("execution-envelope", instance) == []
+
+    def test_observe_adapt_accepts_honest_nonnegative_counters(self):
+        instance = _valid("execution-envelope")
+        instance["limit_policy"]["counters"] = {
+            "max_requests": 0,
+            "max_reserved_tokens": 0,
+        }
+        assert _validate("execution-envelope", instance) == []
+        instance["limit_policy"]["counters"]["max_requests"] = -1
+        assert _validate("execution-envelope", instance) != []
+
     def test_enforcing_policy_declares_its_ceilings_explicitly(self):
         assert _validate("execution-envelope", _enforcing_envelope()) == []
         instance = _enforcing_envelope()
         del instance["limit_policy"]["enforcement"]
+        assert _validate("execution-envelope", instance) != []
+
+    def test_enforcing_requires_positive_cumulative_ceiling(self):
+        instance = _enforcing_envelope()
+        instance["limit_policy"]["enforcement"]["max_requests"] = 0
         assert _validate("execution-envelope", instance) != []
 
     def test_observe_adapt_rejects_enforcement_block(self):
@@ -548,6 +592,23 @@ class TestSchemaIsNotAuthentication:
         assert _validate("run-snapshot", instance) == []
         with pytest.raises(AuthorityBoundaryError):
             verify_native_handle(instance["process_identity"], _run_context(service_principal="other"))
+
+    def test_trusted_context_rejects_wire_shaped_containers(self):
+        # A parsed wire object cannot be forwarded wholesale as authenticated
+        # context: roles must be a frozenset of str, not a JSON list.
+        with pytest.raises(AuthorityBoundaryError):
+            AuthenticatedServiceContext(
+                principal="p", roles=["reviewer"]  # type: ignore[arg-type]
+            )
+        with pytest.raises(AuthorityBoundaryError):
+            AuthenticatedServiceContext(principal="", roles=frozenset({"reviewer"}))
+
+    def test_trusted_context_rejects_non_string_principal(self):
+        with pytest.raises(AuthorityBoundaryError):
+            AuthenticatedServiceContext(
+                principal={"name": "forged"},  # type: ignore[arg-type]
+                roles=frozenset({"reviewer"}),
+            )
 
 
 class TestNativeHandleAuthority:
@@ -636,16 +697,14 @@ class TestRoutingAndMirrorSemantics:
 
 
 class TestLegacyAdapter:
-    def _legacy(self):
+    def _unbounded(self):
+        # A legacy envelope with no cumulative ceiling and no deadline.
         return {
             "envelope_id": "env-legacy",
             "authorized_principal": "owner",
             "subject_digest": DIGEST,
             "brief_digest": DIGEST,
             "scope": {},
-            "deadline_utc": "2026-12-31T00:00:00Z",
-            "max_requests": 10,
-            "max_reserved_tokens": 100,
             "max_request_bytes": 100,
             "max_output_tokens": 100,
             "max_inflight_requests": 2,
@@ -655,15 +714,73 @@ class TestLegacyAdapter:
             "authority_evidence_digest": DIGEST,
         }
 
-    def test_adapted_envelope_validates_and_is_observe_adapt(self):
-        adapted = adapt_legacy_execution_envelope(self._legacy())
+    def _enforcing(self):
+        legacy = self._unbounded()
+        legacy.update(
+            deadline_utc="2026-12-31T00:00:00Z",
+            max_requests=10,
+            max_reserved_tokens=100,
+        )
+        return legacy
+
+    def test_unbounded_legacy_becomes_observe_adapt(self):
+        adapted = adapt_legacy_execution_envelope(self._unbounded())
         assert adapted["limit_policy"]["policy"] == "observe_adapt"
+        assert adapted["deadline_utc"] is None
+        assert "counters" not in adapted["limit_policy"]
         assert _validate("execution-envelope", adapted) == []
 
-    def test_adapting_enforcing_intent_raises_instead_of_guessing(self):
-        legacy = self._legacy()
-        legacy["max_correction_rounds"] = 1
-        with pytest.raises(AuthorityBoundaryError):
+    def test_legacy_request_and_token_figures_are_ceilings_not_free_counters(self):
+        # In the legacy shape max_requests/max_reserved_tokens were finite
+        # ceilings. The adapter must not relabel them as harmless accounting
+        # counters to escape enforcement: with a deadline they become an
+        # enforcing policy carrying exactly those values.
+        legacy = self._unbounded()
+        legacy.update(
+            deadline_utc="2026-12-31T00:00:00Z",
+            max_requests=7,
+            max_reserved_tokens=42,
+        )
+        adapted = adapt_legacy_execution_envelope(legacy)
+        assert adapted["limit_policy"]["policy"] == "enforcing"
+        assert adapted["limit_policy"]["enforcement"]["max_requests"] == 7
+        assert adapted["limit_policy"]["enforcement"]["max_reserved_tokens"] == 42
+        assert _validate("execution-envelope", adapted) == []
+
+    def test_legacy_ceiling_without_deadline_is_rejected_not_downgraded(self):
+        legacy = self._unbounded()
+        legacy.update(max_requests=7, max_reserved_tokens=42)
+        with pytest.raises(LegacyMigrationError):
+            adapt_legacy_execution_envelope(legacy)
+
+    def test_finite_legacy_ceiling_is_preserved_as_enforcing(self):
+        adapted = adapt_legacy_execution_envelope(self._enforcing())
+        assert adapted["limit_policy"]["policy"] == "enforcing"
+        assert adapted["limit_policy"]["enforcement"]["max_requests"] == 10
+        assert adapted["limit_policy"]["enforcement"]["deadline"] is True
+        assert adapted["deadline_utc"] == "2026-12-31T00:00:00Z"
+        assert _validate("execution-envelope", adapted) == []
+
+    def test_legacy_ceiling_is_never_downgraded_to_observe_adapt(self):
+        adapted = adapt_legacy_execution_envelope(self._enforcing())
+        assert adapted["limit_policy"]["policy"] != "observe_adapt"
+
+    def test_enforcing_legacy_without_deadline_is_rejected(self):
+        legacy = self._unbounded()
+        legacy.update(max_requests=10, max_reserved_tokens=100)
+        with pytest.raises(LegacyMigrationError):
+            adapt_legacy_execution_envelope(legacy)
+
+    def test_missing_required_field_is_rejected(self):
+        legacy = self._unbounded()
+        del legacy["authority_evidence_digest"]
+        with pytest.raises(LegacyMigrationError):
+            adapt_legacy_execution_envelope(legacy)
+
+    def test_unknown_schema_version_is_refused(self):
+        legacy = self._unbounded()
+        legacy["schema_version"] = "2.0.0"
+        with pytest.raises(UnsupportedSchemaVersionError):
             adapt_legacy_execution_envelope(legacy)
 
 
@@ -683,3 +800,115 @@ class TestExecutionRegistry:
         instance = _valid("run-snapshot")
         instance["state"] = "not-a-real-state"
         assert _validate("run-snapshot", instance) != []
+
+
+# ---------------------------------------------------------------------------
+# installed-wheel regression — the digest must survive the build, not just
+# a PYTHONPATH=src checkout
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def installed_wheel(tmp_path_factory):
+    """Build the wheel, install it into an isolated target, and load *that*.
+
+    A ``PYTHONPATH=src`` test passes even when the wheel omits the nested
+    ``execution/`` schemas, because the source tree is present on disk. This
+    fixture closes that gap by packaging and installing for real, then importing
+    the installed copy in a subprocess with ``PYTHONPATH`` pointed only at the
+    installed target (and every other copy removed from ``sys.path``).
+    """
+    outdir = tmp_path_factory.mktemp("wheel")
+    build = subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--no-isolation",
+         "--outdir", str(outdir)],
+        cwd=str(ROOT), capture_output=True, text=True,
+    )
+    if build.returncode != 0:
+        # The build step is a hard requirement: skipping on its absence would
+        # hide exactly the packaging gap this test exists to catch.
+        raise AssertionError(
+            f"wheel build failed ({build.returncode})\nstdout:\n{build.stdout}\n"
+            f"stderr:\n{build.stderr}"
+        )
+    wheels = sorted(outdir.glob("*.whl"))
+    assert len(wheels) == 1, f"expected one wheel, found {[w.name for w in wheels]}"
+    wheel = wheels[0]
+
+    target = tmp_path_factory.mktemp("installed")
+    install = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--no-index", "--no-deps",
+         "--no-build-isolation", "--quiet", "--target", str(target), str(wheel)],
+        capture_output=True, text=True,
+    )
+    if install.returncode != 0:
+        raise AssertionError(
+            f"wheel install failed ({install.returncode})\nstdout:\n"
+            f"{install.stdout}\nstderr:\n{install.stderr}"
+        )
+    return wheel, target
+
+
+def _probe_installed(target: Path) -> dict:
+    """Import the installed package in a clean subprocess and report facts.
+
+    ``sys.path`` is rebuilt to contain only the target, so a source-tree copy
+    cannot satisfy the import by accident.
+    """
+    probe = (
+        "import json, sys\n"
+        "sys.path[:] = [p for p in sys.path if p not in ('', '.')]\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import skillweave_sdk\n"
+        "import skillweave_sdk.validator as v\n"
+        "from importlib.resources import files\n"
+        "import os\n"
+        "root = os.path.dirname(skillweave_sdk.__file__)\n"
+        "exec_dir = files('skillweave_sdk') / 'schemas' / 'execution'\n"
+        "print(json.dumps({\n"
+        "  'module_file': skillweave_sdk.__file__,\n"
+        "  'import_root': root,\n"
+        "  'canonical_digest': v.canonical_digest(),\n"
+        "  'registry_size': len(v.load_registry()),\n"
+        "  'execution_files': sorted(p.name for p in exec_dir.iterdir()),\n"
+        "}))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(target)],
+        cwd=str(target), capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": ""},
+    )
+    assert result.returncode == 0, (
+        f"importing the installed wheel failed\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+class TestInstalledWheel:
+    def test_wheel_contains_every_execution_schema(self, installed_wheel):
+        wheel, _ = installed_wheel
+        with zipfile.ZipFile(wheel) as archive:
+            names = archive.namelist()
+        execution = [
+            n for n in names
+            if n.startswith("skillweave_sdk/schemas/execution/") and n.endswith(".json")
+        ]
+        assert len(execution) == len(EXECUTION_SCHEMA_FILENAMES), (
+            f"wheel ships {len(execution)} execution schemas, expected "
+            f"{len(EXECUTION_SCHEMA_FILENAMES)}: {names}"
+        )
+        shipped = {n.rsplit("/", 1)[1] for n in execution}
+        assert shipped == set(EXECUTION_SCHEMA_FILENAMES)
+
+    def test_installed_wheel_imports_with_matching_digest(self, installed_wheel):
+        _, target = installed_wheel
+        facts = _probe_installed(target)
+        # The import resolved to the installed copy, not the source tree.
+        assert str(target) in facts["module_file"], facts
+        assert facts["execution_files"], "no execution schemas visible after install"
+        assert facts["registry_size"] == len(SCHEMA_FILENAMES) + len(EXECUTION_SCHEMA_FILENAMES)
+        # The digest of the installed bytes equals the frozen digest — proving
+        # the wheel carries the exact frozen schemas, not a stale subset.
+        assert facts["canonical_digest"] == canonical_digest(SCHEMAS)
+        assert facts["canonical_digest"] == EXPECTED_SCHEMA_DIGEST

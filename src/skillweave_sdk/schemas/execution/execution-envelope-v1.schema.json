@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://skillweave.dev/schemas/execution/execution-envelope/v1",
   "title": "Execution Envelope v1",
-  "description": "Frozen execution contract (SW-1510-CONTRACT). Service-authorized execution budget for one run, carrying two explicit policies: 'observe_adapt' records atomic counters and applies only per-request limits and active-slot caps, with no hidden cumulative USD/token/request ceiling and no whole-job deadline; 'enforcing' is an explicit opt-in whose ceilings are stated in the envelope and abort when reached. Unknown usage is recorded as unknown and remains reserved; it is never counted as zero. authorized_principal and authority_evidence_digest come from the owner authority, not a worker claim.",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Service-authorized execution budget for one run, carrying one of two explicit policies. 'observe_adapt' records atomic counters and applies only per-request limits and active-slot caps; it has no cumulative USD/token/request ceiling and no whole-job deadline (deadline_utc is a scheduling target, or null, and never aborts productive work). 'enforcing' is an explicit opt-in whose cumulative ceilings and deadline flag are stated in the envelope and abort when reached. Unknown usage is recorded as unknown and remains reserved; it is never counted as zero. authorized_principal and authority_evidence_digest come from the owner authority, not a worker claim.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -21,15 +21,16 @@
     "brief_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "scope": { "type": "object" },
     "deadline_utc": {
-      "type": "string", "format": "date-time",
-      "description": "Scheduling target. It is a hard abort deadline ONLY when limit_policy.policy is 'enforcing' and limit_policy.enforcement.deadline is true; under 'observe_adapt' it never aborts productive work."
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Scheduling target, or null when there is none. It is a hard abort deadline ONLY when limit_policy.policy is 'enforcing' and limit_policy.enforcement.deadline is true. Under 'observe_adapt' it never aborts productive work, and null is an honest 'no deadline' value, never a fabricated future date."
     },
     "limit_policy": {
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["policy", "max_request_bytes", "max_output_tokens", "max_inflight_requests", "max_parallel_lanes", "counters"],
+          "required": ["policy", "max_request_bytes", "max_output_tokens", "max_inflight_requests", "max_parallel_lanes"],
           "properties": {
             "policy": { "const": "observe_adapt" },
             "max_request_bytes": { "type": "integer", "minimum": 1, "description": "Per-request pre-flight exposure reservation in raw request bytes." },
@@ -38,10 +39,11 @@
             "max_parallel_lanes": { "type": "integer", "minimum": 1 },
             "counters": {
               "type": "object", "additionalProperties": false,
+              "description": "Optional atomic accounting counters. These are measurements, not completion-stopping ceilings; when omitted there is simply no accounting ceiling. No invented positive maximum is required.",
               "required": ["max_requests", "max_reserved_tokens"],
               "properties": {
-                "max_requests": { "type": "integer", "minimum": 1, "description": "Atomic request counter ceiling for accounting; not a whole-job completion-stopping limit under observe_adapt." },
-                "max_reserved_tokens": { "type": "integer", "minimum": 1, "description": "Atomic token-reservation counter ceiling for accounting; not a whole-job completion-stopping limit under observe_adapt." }
+                "max_requests": { "type": "integer", "minimum": 0, "description": "Nonnegative atomic request counter. Measurement only under observe_adapt." },
+                "max_reserved_tokens": { "type": "integer", "minimum": 0, "description": "Nonnegative atomic token-reservation counter. Measurement only under observe_adapt." }
               }
             }
           }
@@ -71,7 +73,7 @@
                 "max_requests": { "type": "integer", "minimum": 1, "description": "Explicit cumulative request ceiling that aborts when reached." },
                 "max_reserved_tokens": { "type": "integer", "minimum": 1, "description": "Explicit cumulative token ceiling that aborts when reached." },
                 "max_correction_rounds": { "type": "integer", "minimum": 0, "description": "Zero correction rounds is a valid finite choice; unbounded retry has no representation here." },
-                "deadline": { "type": "boolean", "description": "When true, deadline_utc is an enforcing abort deadline." }
+                "deadline": { "type": "boolean", "description": "When true, deadline_utc must be a real timestamp and aborts when reached." }
               }
             }
           }

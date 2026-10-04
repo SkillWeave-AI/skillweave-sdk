@@ -80,7 +80,7 @@ EXECUTION_SCHEMA_FILENAMES = (
 # schema, concatenated in sorted-identity order. It changes iff the
 # byte set changes. Covers both the flat core/lifecycle schemas and the nested
 # execution contract set.
-EXPECTED_SCHEMA_DIGEST = "d1b8c5396dff9bcf7ac8442bfa08c43e9e3eb35c0d24c269d2dccfcf2acf3b5e"
+EXPECTED_SCHEMA_DIGEST = "216e5f17057a3ae2a01da41d0493dced60eaceaf330bed913bd3f281dbc164d5"
 
 
 class SchemaDigestError(Exception):
@@ -485,9 +485,14 @@ class AuthorityBoundaryError(Exception):
 class AuthenticatedServiceContext:
     """Trusted facts obtained from the authenticated service seam.
 
-    This object is constructed by the runtime after authentication (mTLS, a
+    This object is constructed by the runtime *after* authentication (mTLS, a
     signed service token, a native handle registry lookup). None of its fields
-    may be populated from the wire instance under verification.
+    may be populated from the wire instance under verification, and the
+    constructor refuses container values so a parsed JSON object cannot be
+    forwarded wholesale as "trusted" context. This guard is a shape check, not
+    authentication: the SDK cannot prove a caller authenticated anything. The
+    runtime seam that owns authentication must supply this object and must not
+    derive any of its fields from the untrusted instance.
     """
 
     principal: str
@@ -496,6 +501,26 @@ class AuthenticatedServiceContext:
     issued_handle_ids: frozenset[str] = frozenset()
     authority_decision_digests: frozenset[str] = frozenset()
     worker_principal: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("principal", "service_principal", "worker_principal"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise AuthorityBoundaryError(
+                    f"trusted context field {name!r} must be a string, got "
+                    f"{type(value).__name__}; a parsed wire object must not be "
+                    f"used as authenticated context"
+                )
+        if not self.principal:
+            raise AuthorityBoundaryError("trusted context requires a principal")
+        for name in ("roles", "issued_handle_ids", "authority_decision_digests"):
+            value = getattr(self, name)
+            if not isinstance(value, frozenset) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise AuthorityBoundaryError(
+                    f"trusted context field {name!r} must be a frozenset of str"
+                )
 
 
 #: Roles that may author an independent reviewer/observer attestation.
@@ -573,7 +598,8 @@ def _verify_decision(digest: Any, context: AuthenticatedServiceContext) -> None:
 #
 # Legacy consumers of the pre-SW-1510 flat shapes reach the frozen contracts
 # only through these explicit, tested adapters. There is no silent coercion:
-# an adapter that cannot represent a legacy value raises rather than guessing.
+# an adapter that cannot represent a legacy value raises rather than guessing,
+# and it NEVER downgrades an authority-bearing legacy limit.
 
 LEGACY_ENVELOPE_FIELDS = (
     "envelope_id",
@@ -581,9 +607,6 @@ LEGACY_ENVELOPE_FIELDS = (
     "subject_digest",
     "brief_digest",
     "scope",
-    "deadline_utc",
-    "max_requests",
-    "max_reserved_tokens",
     "max_request_bytes",
     "max_output_tokens",
     "max_inflight_requests",
@@ -593,47 +616,139 @@ LEGACY_ENVELOPE_FIELDS = (
     "authority_evidence_digest",
 )
 
+#: Legacy keys that expressed a real completion-stopping ceiling or deadline.
+#: Migrating one of these to observe_adapt would silently widen authority, so
+#: the adapter preserves them as an explicit enforcing policy instead.
+LEGACY_ENFORCING_KEYS = (
+    "max_requests",
+    "max_reserved_tokens",
+    "deadline_utc",
+    "max_correction_rounds",
+)
+
+
+class LegacyMigrationError(AuthorityBoundaryError):
+    """Raised when a legacy envelope cannot be migrated without weakening it."""
+
 
 def adapt_legacy_execution_envelope(legacy: dict) -> dict:
     """Map a pre-SW-1510 flat envelope onto the frozen execution-envelope-v1.
 
-    The flat limits become an explicit ``observe_adapt`` policy: atomic counters
-    are retained for accounting, per-request limits and active slots are
-    preserved, and no hidden whole-job ceiling is created. A legacy
-    ``max_correction_rounds`` has no observe_adapt representation and raises
-    rather than being silently dropped.
+    Two sound outcomes, chosen from the legacy content rather than from a
+    blanket policy change:
+
+    * A legacy envelope that carried a finite ceiling or a deadline is migrated
+      to an explicit ``enforcing`` policy, preserving those ceilings. It is
+      never downgraded to ``observe_adapt``.
+    * A legacy envelope with no cumulative ceiling and no deadline migrates to
+      ``observe_adapt``. Its per-request limits and active slots are preserved
+      and any legacy request/token figures are retained only as nonnegative
+      accounting counters. No invented maximum and no fabricated future date is
+      introduced.
+
+    Anything that cannot be represented soundly (an unknown schema version, a
+    missing required field, a non-positive per-request limit, or an enforcing
+    legacy envelope whose deadline is absent) raises with an actionable message.
     """
     if not isinstance(legacy, dict):
-        raise AuthorityBoundaryError("legacy envelope must be an object")
-    require_supported_version(legacy) if "schema_version" in legacy else None
-    if "max_correction_rounds" in legacy:
-        raise AuthorityBoundaryError(
-            "legacy max_correction_rounds cannot be represented under "
-            "observe_adapt; supply an explicit enforcing envelope instead"
-        )
+        raise LegacyMigrationError("legacy envelope must be an object")
+    if "schema_version" in legacy:
+        require_supported_version(legacy)  # unknown versions fail closed
+
     missing = [f for f in LEGACY_ENVELOPE_FIELDS if f not in legacy]
     if missing:
-        raise AuthorityBoundaryError(f"legacy envelope missing fields: {missing}")
-    return {
+        raise LegacyMigrationError(f"legacy envelope missing fields: {missing}")
+
+    for per_request in ("max_request_bytes", "max_output_tokens",
+                        "max_inflight_requests", "max_parallel_lanes"):
+        value = legacy[per_request]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise LegacyMigrationError(
+                f"legacy {per_request} must be a positive integer, got {value!r}"
+            )
+
+    has_ceiling = any(k in legacy for k in LEGACY_ENFORCING_KEYS)
+    base = {
         "schema_version": "1.0.0",
         "envelope_id": legacy["envelope_id"],
         "authorized_principal": legacy["authorized_principal"],
         "subject_digest": legacy["subject_digest"],
         "brief_digest": legacy["brief_digest"],
         "scope": legacy["scope"],
-        "deadline_utc": legacy["deadline_utc"],
-        "limit_policy": {
+        "allowed_routes": legacy["allowed_routes"],
+        "irreversible_actions": legacy["irreversible_actions"],
+        "authority_evidence_digest": legacy["authority_evidence_digest"],
+    }
+
+    if not has_ceiling:
+        deadline = legacy.get("deadline_utc", None)
+        counters = None
+        if all(k in legacy for k in ("max_requests", "max_reserved_tokens")):
+            counters = {
+                "max_requests": _nonnegative_int(legacy["max_requests"], "max_requests"),
+                "max_reserved_tokens": _nonnegative_int(
+                    legacy["max_reserved_tokens"], "max_reserved_tokens"
+                ),
+            }
+        policy = {
             "policy": "observe_adapt",
             "max_request_bytes": legacy["max_request_bytes"],
             "max_output_tokens": legacy["max_output_tokens"],
             "max_inflight_requests": legacy["max_inflight_requests"],
             "max_parallel_lanes": legacy["max_parallel_lanes"],
-            "counters": {
-                "max_requests": legacy["max_requests"],
-                "max_reserved_tokens": legacy["max_reserved_tokens"],
-            },
+        }
+        if counters is not None:
+            policy["counters"] = counters
+        base["deadline_utc"] = deadline
+        base["limit_policy"] = policy
+        return base
+
+    # Explicit enforcing intent: preserve, do not weaken.
+    if "max_requests" not in legacy or "max_reserved_tokens" not in legacy:
+        raise LegacyMigrationError(
+            "legacy envelope has enforcing intent but a cumulative ceiling is "
+            "absent; supply an explicit enforcing envelope"
+        )
+    deadline_utc = legacy.get("deadline_utc")
+    if not isinstance(deadline_utc, str) or not deadline_utc:
+        raise LegacyMigrationError(
+            "legacy envelope has enforcing intent but no deadline_utc; a "
+            "fabricated date is not accepted — supply a real deadline"
+        )
+    max_requests = _positive_int(legacy["max_requests"], "max_requests")
+    max_reserved = _positive_int(legacy["max_reserved_tokens"], "max_reserved_tokens")
+    correction_rounds = legacy.get("max_correction_rounds", 0)
+    if not isinstance(correction_rounds, int) or isinstance(correction_rounds, bool) or correction_rounds < 0:
+        raise LegacyMigrationError(
+            f"legacy max_correction_rounds must be a nonnegative integer, got {correction_rounds!r}"
+        )
+    base["deadline_utc"] = deadline_utc
+    base["limit_policy"] = {
+        "policy": "enforcing",
+        "max_request_bytes": legacy["max_request_bytes"],
+        "max_output_tokens": legacy["max_output_tokens"],
+        "max_inflight_requests": legacy["max_inflight_requests"],
+        "max_parallel_lanes": legacy["max_parallel_lanes"],
+        "counters": {"max_requests": max_requests, "max_reserved_tokens": max_reserved},
+        "enforcement": {
+            "max_requests": max_requests,
+            "max_reserved_tokens": max_reserved,
+            "max_correction_rounds": correction_rounds,
+            "deadline": True,
         },
-        "allowed_routes": legacy["allowed_routes"],
-        "irreversible_actions": legacy["irreversible_actions"],
-        "authority_evidence_digest": legacy["authority_evidence_digest"],
     }
+    return base
+
+
+def _positive_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise LegacyMigrationError(f"legacy {name} must be a positive integer, got {value!r}")
+    return value
+
+
+def _nonnegative_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise LegacyMigrationError(
+            f"legacy {name} must be a nonnegative integer, got {value!r}"
+        )
+    return value

@@ -13,9 +13,26 @@ Forgejo is canonical; GitHub is the read-only mirror.
 | Path | Purpose |
 |---|---|
 | `schemas/` | The core schemas (JSON Schema draft 2020-12) |
+| `schemas/execution/` | The frozen execution contract set (SW-1510-CONTRACT): run/attempt/evidence/routing |
 | `contract/` | Machine-readable value-set extracts, so a consumer can validate without a Python context |
+| `docs/execution-contract*.md` | The frozen set, its envelope policy and its trust boundary |
 | `schema_version.toml` | Root of the release graph; consumers pin a version from here |
-| `src/skillweave_sdk/` | The distribution. Carries the version and nothing else yet |
+| `src/skillweave_sdk/` | The distribution: schemas, the taxonomy value set and the validator |
+
+## The frozen execution contract set
+
+`schemas/execution/` freezes the integrated run, attempt, evidence and routing
+contracts as a namespaced v1 set, indexed by `contract/execution-catalog.json`
+with one named owner and an immutable sha256 per contract. The SDK owns the
+**contract**; Core, ops-engine and the router keep their **runtime** ownership
+and consume these records through the SDK. There is no second workflow runtime
+here.
+
+- `docs/execution-contract.md` — contracts, owners, digests, migration, provenance
+- `docs/execution-contract-envelope.md` — the `observe_adapt` / `enforcing` limit policies
+- `docs/execution-contract-trust-boundary.md` — wire validation vs. authenticated context
+
+The set is **not yet CI-qualified**; that is the separate SDK-CI task.
 
 ## Where the line runs
 
