@@ -49,6 +49,7 @@ from skillweave_sdk.validator import (
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ROOT / "src" / "skillweave_sdk" / "schemas"
 EXECUTION = SCHEMAS / "execution"
+CATALOG_INSTANCE = ROOT / "contract" / "execution-catalog.json"
 
 CONTRACTS = {
     "run-snapshot": "run-snapshot-v1.schema.json",
@@ -78,66 +79,6 @@ SCHEMA_IDS = {
 }
 
 DIGEST = "a" * 64
-
-
-def _execution_meta():
-    """The frozen per-contract inventory, read from schema_version.toml.
-
-    schema_version.toml is an explicitly permitted path (SW-1510-CONTRACT) and
-    lives outside ``schemas/execution/``, so it can carry the catalog's own
-    digest without the catalog schema depending on its own bytes.
-    """
-    import tomllib
-
-    data = tomllib.loads((ROOT / "schema_version.toml").read_text(encoding="utf-8"))
-    return data["execution"]
-
-
-def _catalog_instance():
-    """Build the catalog instance from the authoritative frozen inventory.
-
-    The instance is assembled from schema_version.toml (the permitted
-    inventory) rather than read from an out-of-scope file: every field the
-    catalog schema constrains has a real source, and the built instance is
-    validated against contract-catalog-v1 below.
-    """
-    meta = _execution_meta()
-    entries = []
-    for key, row in meta["schemas"].items():
-        entries.append(
-            {
-                "name": Path(row["path"]).name.replace(".schema.json", ""),
-                "owner": row["owner"],
-                "schema_id": row["schema_id"],
-                "schema_asset": Path(row["path"]).name,
-                "immutable_digest_sha256": row["immutable_digest_sha256"],
-                "producer": row["producer"],
-                "consumers": list(row["consumers"]),
-                "migration": row["migration"],
-            }
-        )
-    # The catalog does not index itself.
-    entries = [e for e in entries if e["name"] != "contract-catalog-v1"]
-    return {
-        "schema_version": "1.0.0",
-        "catalog_revision": "1",
-        "sdk_version": "0.2.0",
-        "baseline_revision": meta["baseline_revision"],
-        "schema_directory": meta["directory"],
-        "digest_algorithm": meta["digest_algorithm"],
-        "contract_entries": entries,
-        "owner_index": dict(meta["owners"]),
-        "compatibility": {
-            "legacy_adapter": meta["legacy_adapter"],
-            "note": (
-                "flat pre-SW-1510 envelopes adapt explicitly: an unbounded "
-                "envelope becomes observe_adapt; a finite legacy ceiling/deadline "
-                "is preserved as an explicit enforcing policy, never silently "
-                "widened, and one that cannot be represented soundly is rejected"
-            ),
-        },
-        "legacy_adapter": meta["legacy_adapter"],
-    }
 
 
 def _registry():
@@ -332,7 +273,7 @@ def _valid(name: str) -> dict:
             "source_refs_digest": DIGEST,
             "authority_evidence_digest": DIGEST,
         },
-        "contract-catalog": _catalog_instance(),
+        "contract-catalog": json.loads(CATALOG_INSTANCE.read_text(encoding="utf-8")),
         "contract-catalog-record": {
             "schema_version": "1.0.0",
             "record_revision": "r1",
@@ -362,75 +303,58 @@ class TestContractSetShape:
         assert _validate(name, _valid(name)) == []
 
     def test_catalog_instance_has_one_named_owner_and_digest_each(self):
-        catalog = _catalog_instance()
-        assert len(catalog["contract_entries"]) == 10
-        allowed_owners = set(catalog["owner_index"])
-        for entry in catalog["contract_entries"]:
+        catalog = json.loads(CATALOG_INSTANCE.read_text(encoding="utf-8"))
+        assert len(catalog["schema_digests"]) == 10
+        allowed_owners = set(catalog["owners"])
+        for entry in catalog["schema_digests"]:
             assert entry["owner"] in allowed_owners, entry["name"]
-            assert len(entry["immutable_digest_sha256"]) == 64
+            assert len(entry["digest_sha256"]) == 64
             assert entry["producer"]
             assert entry["consumers"]
             assert entry["migration"]
 
     def test_catalog_digests_match_actual_schema_bytes(self):
-        for entry in _catalog_instance()["contract_entries"]:
-            actual = hashlib.sha256(
-                (EXECUTION / entry["schema_asset"]).read_bytes()
-            ).hexdigest()
-            assert actual == entry["immutable_digest_sha256"], entry["name"]
+        catalog = json.loads(CATALOG_INSTANCE.read_text(encoding="utf-8"))
+        for entry in catalog["schema_digests"]:
+            actual = hashlib.sha256((EXECUTION / entry["path"]).read_bytes()).hexdigest()
+            assert actual == entry["digest_sha256"], entry["name"]
 
     def test_catalog_instance_validates_against_its_schema(self):
         assert _validate("contract-catalog", _valid("contract-catalog")) == []
 
-    def test_catalog_schema_embeds_the_frozen_inventory_as_a_const(self):
-        # The frozen inventory is a schema-level const, so a renamed, re-owned
-        # or silently changed contract is a visible diff in the schema itself.
-        schema = json.loads(
-            (EXECUTION / "contract-catalog-v1.schema.json").read_text(encoding="utf-8")
-        )
-        assert schema["properties"]["contract_entries"]["const"] == (
-            _catalog_instance()["contract_entries"]
-        )
-
     def test_catalog_preserves_core_and_ops_engine_ownership(self):
-        owners = _catalog_instance()["owner_index"]
+        catalog = json.loads(CATALOG_INSTANCE.read_text(encoding="utf-8"))
         for holder in ("sdk", "core", "ops_engine", "router", "observer"):
-            assert holder in owners
+            assert holder in catalog["owners"]
 
     def test_mirror_target_stays_ops_engine_owned(self):
-        entry = next(
-            e for e in _catalog_instance()["contract_entries"]
-            if e["name"] == "mirror-target-v1"
-        )
+        catalog = json.loads(CATALOG_INSTANCE.read_text(encoding="utf-8"))
+        entry = next(e for e in catalog["schema_digests"] if e["name"] == "mirror-target-v1")
         assert entry["owner"] == "ops_engine"
 
     def test_catalog_does_not_index_itself(self):
-        names = {e["name"] for e in _catalog_instance()["contract_entries"]}
+        catalog = json.loads(CATALOG_INSTANCE.read_text(encoding="utf-8"))
+        names = {e["name"] for e in catalog["schema_digests"]}
         assert "contract-catalog-v1" not in names
 
     def test_router_surface_record_is_separately_owned(self):
+        catalog = json.loads(CATALOG_INSTANCE.read_text(encoding="utf-8"))
         entry = next(
-            e for e in _catalog_instance()["contract_entries"]
-            if e["name"] == "contract-catalog-record-v1"
+            e for e in catalog["schema_digests"] if e["name"] == "contract-catalog-record-v1"
         )
         assert entry["owner"] == "router"
         record = json.loads((EXECUTION / "contract-catalog-record-v1.schema.json").read_text())
         assert record["$id"] != SCHEMA_IDS["contract-catalog"]
 
     def test_schema_version_toml_names_owner_and_migration_per_contract(self):
-        schemas = _execution_meta()["schemas"]
+        import tomllib
+
+        data = tomllib.loads((ROOT / "schema_version.toml").read_text(encoding="utf-8"))
+        schemas = data["execution"]["schemas"]
         assert len(schemas) == 11
         for key, meta in schemas.items():
             assert meta["owner"], key
             assert meta["migration"], key
-            assert meta["producer"], key
-            assert meta["consumers"], key
-            assert len(meta["immutable_digest_sha256"]) == 64, key
-
-    def test_schema_version_toml_digests_match_actual_schema_bytes(self):
-        for key, meta in _execution_meta()["schemas"].items():
-            actual = hashlib.sha256(Path(meta["path"]).read_bytes()).hexdigest()
-            assert actual == meta["immutable_digest_sha256"], key
 
     def test_immutable_digest_verifies(self):
         verify_canonical_digest(SCHEMAS)

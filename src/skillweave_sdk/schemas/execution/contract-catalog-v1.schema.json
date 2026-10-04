@@ -2,290 +2,56 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://skillweave.dev/schemas/execution/contract-catalog/v1",
   "title": "Contract Catalog v1",
-  "description": "Frozen execution contract (SW-1510-CONTRACT). The SDK-owned index of the ten frozen execution contracts. Each entry names exactly one owner and an immutable sha256 digest of the exact schema bytes, with an explicit producer, consumers and migration route. The catalog does not index itself: self-reference would make its digest depend on its own bytes. The router-owned surface is published through the separate contract-catalog-record-v1 contract. The catalog records a baseline/source revision only; the integration revision is recorded by the integration step externally, never as a self-reference.",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). The SDK-owned index of the frozen execution contract set. Each entry names exactly one owner and an immutable sha256 digest of the exact schema bytes, with an explicit producer, consumers and migration route. The catalog does not index itself: self-reference would make its digest depend on its own bytes. The ops-engine-owned router surface is published through the separate contract-catalog-record-v1 contract.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version",
-    "catalog_revision",
-    "sdk_version",
-    "baseline_revision",
-    "schema_directory",
-    "digest_algorithm",
-    "contract_entries",
-    "owner_index",
-    "compatibility",
-    "legacy_adapter"
+    "schema_version", "catalog_revision", "sdk_version", "baseline_commit",
+    "integration_commit", "schema_directory", "digest_algorithm",
+    "schema_digests", "owners", "compatibility"
   ],
   "properties": {
-    "schema_version": {
-      "const": "1.0.0"
+    "schema_version": { "const": "1.0.0" },
+    "catalog_revision": { "type": "string", "minLength": 1 },
+    "sdk_version": { "type": "string", "minLength": 1, "description": "SDK version this catalog belongs to; equals schema_version.toml [schema].version." },
+    "baseline_commit": { "type": "string", "pattern": "^[a-f0-9]{40}$", "description": "The source revision the frozen execution contract schemas were authored against. A real, already-existing commit — never this catalog's own commit." },
+    "integration_commit": { "type": "string", "pattern": "^[a-f0-9]{40}$", "description": "The revision at which the enclosing contract-set change is integrated. Recorded by the integration step, which alone can resolve it without self-reference; until then it points at the baseline commit, never at this commit's own (unknowable) SHA." },
+    "schema_directory": { "type": "string", "const": "src/skillweave_sdk/schemas/execution" },
+    "digest_algorithm": { "type": "string", "const": "sha256" },
+    "schema_digests": {
+      "type": "array", "minItems": 10,
+      "items": { "$ref": "#/$defs/contract_entry" }
     },
-    "catalog_revision": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Monotonic revision of the frozen catalog."
-    },
-    "sdk_version": {
-      "type": "string",
-      "minLength": 1,
-      "description": "SDK version this catalog belongs to; equals schema_version.toml [schema].version."
-    },
-    "baseline_revision": {
-      "type": "string",
-      "pattern": "^[a-f0-9]{40}$",
-      "description": "The SDK baseline/source revision the frozen contract set was authored against. A real, already-existing commit. This is NOT the catalog's own commit and NOT an integration revision: the integration step records the integration revision externally."
-    },
-    "schema_directory": {
-      "type": "string",
-      "const": "src/skillweave_sdk/schemas/execution"
-    },
-    "digest_algorithm": {
-      "type": "string",
-      "const": "sha256"
-    },
-    "contract_entries": {
-      "const": [
-        {
-          "name": "run-snapshot-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/run-snapshot/v1",
-          "schema_asset": "run-snapshot-v1.schema.json",
-          "immutable_digest_sha256": "0ee3b20608a956ad9088c53880c7920ff0053691f2a8ed3c327588bb2b9bf7e8",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "new opt-in v1 namespace; explicit legacy adapter"
-        },
-        {
-          "name": "attempt-event-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/attempt-event/v1",
-          "schema_asset": "attempt-event-v1.schema.json",
-          "immutable_digest_sha256": "fb221a0e051b49c399c304dad57f1882eb71ae481d63f543d5ee6cb963d6473c",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "new opt-in v1 namespace; explicit legacy adapter"
-        },
-        {
-          "name": "evidence-receipt-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/evidence-receipt/v1",
-          "schema_asset": "evidence-receipt-v1.schema.json",
-          "immutable_digest_sha256": "af6e6196a0a5d4841ef3dcfb2ed49b48e249a36a1be7099ce38002fa6149f1b8",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "new opt-in v1 namespace; explicit legacy adapter"
-        },
-        {
-          "name": "execution-envelope-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/execution-envelope/v1",
-          "schema_asset": "execution-envelope-v1.schema.json",
-          "immutable_digest_sha256": "e3e07570727e5785f4d3f1f142ca1ee0a1d92eb6681475a6f702cb8c431bba54",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "explicit legacy flat-envelope adapter emits observe_adapt policy"
-        },
-        {
-          "name": "reservation-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/reservation/v1",
-          "schema_asset": "reservation-v1.schema.json",
-          "immutable_digest_sha256": "fc311c7a7ef7b26a8ec4477d7a26dbc14033c1612da70b0791e2b62aca345005",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "new opt-in v1 namespace; the single admission ledger stays authoritative"
-        },
-        {
-          "name": "route-decision-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/route-decision/v1",
-          "schema_asset": "route-decision-v1.schema.json",
-          "immutable_digest_sha256": "12a7314d4fccb2685479477425410f76bde16cef171cb635c1413574174230eb",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "new opt-in v1 namespace; router keeps emitting decisions, SDK only freezes the record"
-        },
-        {
-          "name": "capability-snapshot-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/capability-snapshot/v1",
-          "schema_asset": "capability-snapshot-v1.schema.json",
-          "immutable_digest_sha256": "d2429589b091a287bb5a7d80c78c77b3f6915e14f2c906cd2bd9192a21829d81",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "new opt-in v1 namespace; measuring service keeps ownership"
-        },
-        {
-          "name": "agent-message-v1",
-          "owner": "sdk",
-          "schema_id": "https://skillweave.dev/schemas/execution/agent-message/v1",
-          "schema_asset": "agent-message-v1.schema.json",
-          "immutable_digest_sha256": "247c971ec76b52d0fe83062e7b051846e5a0d8cb516fbe257045a766a299f44f",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "new opt-in v1 namespace; mailbox service keeps delivery authority"
-        },
-        {
-          "name": "mirror-target-v1",
-          "owner": "ops_engine",
-          "schema_id": "https://skillweave.dev/schemas/execution/mirror-target/v1",
-          "schema_asset": "mirror-target-v1.schema.json",
-          "immutable_digest_sha256": "0d922d65d8f825668e2f5a19986753ebf5f36bd7e5ae4e977cbaa29648f47af1",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "ops-engine keeps release/mirror machinery; SDK freezes the wire record"
-        },
-        {
-          "name": "contract-catalog-record-v1",
-          "owner": "router",
-          "schema_id": "https://skillweave.dev/schemas/execution/contract-catalog-record/v1",
-          "schema_asset": "contract-catalog-record-v1.schema.json",
-          "immutable_digest_sha256": "b0e77bf177cf7d2eeeee4bedebfbeadf8e039ecb5ef89906917604cea7848e0d",
-          "producer": "sdk contract freeze",
-          "consumers": [
-            "cli",
-            "mcp",
-            "observer"
-          ],
-          "migration": "publishes the existing router-owned catalog surface; ownership does not transfer"
-        }
-      ],
-      "description": "Frozen inventory: ten contracts, each with one named owner, an immutable digest of the exact schema bytes, producer, consumers and migration. Excludes the catalog itself."
-    },
-    "owner_index": {
+    "owners": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "sdk",
-        "core",
-        "ops_engine",
-        "router",
-        "observer"
-      ],
+      "required": ["sdk", "core", "ops_engine", "router", "observer"],
       "properties": {
-        "sdk": {
-          "type": "string",
-          "minLength": 1
-        },
-        "core": {
-          "type": "string",
-          "minLength": 1
-        },
-        "ops_engine": {
-          "type": "string",
-          "minLength": 1
-        },
-        "router": {
-          "type": "string",
-          "minLength": 1
-        },
-        "observer": {
-          "type": "string",
-          "minLength": 1
-        }
+        "sdk": { "type": "string", "minLength": 1 },
+        "core": { "type": "string", "minLength": 1 },
+        "ops_engine": { "type": "string", "minLength": 1 },
+        "router": { "type": "string", "minLength": 1 },
+        "observer": { "type": "string", "minLength": 1 }
       },
       "description": "Explicit ownership map preserving existing Core/ops-engine ownership instead of silently reassigning it."
     },
-    "compatibility": {
-      "type": "object"
-    },
-    "legacy_adapter": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Fully qualified name of the explicit legacy adapter, if any."
-    }
+    "compatibility": { "type": "object" }
   },
   "$defs": {
     "contract_entry": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "name",
-        "owner",
-        "schema_id",
-        "schema_asset",
-        "immutable_digest_sha256",
-        "producer",
-        "consumers",
-        "migration"
-      ],
+      "required": ["name", "schema_id", "path", "digest_sha256", "owner", "status", "producer", "consumers", "migration"],
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "owner": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Exactly one named owner for this contract."
-        },
-        "schema_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "schema_asset": {
-          "type": "string",
-          "minLength": 1
-        },
-        "immutable_digest_sha256": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$",
-          "description": "Immutable digest of the exact schema bytes; a changed byte set changes the digest."
-        },
-        "producer": {
-          "type": "string",
-          "minLength": 1
-        },
-        "consumers": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "migration": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Explicit migration note, including the legacy adapter where one exists."
-        }
+        "name": { "type": "string", "minLength": 1 },
+        "schema_id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "digest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Immutable digest of the exact schema bytes." },
+        "owner": { "type": "string", "minLength": 1, "description": "Exactly one named owner for this contract." },
+        "status": { "enum": ["frozen", "proposed"] },
+        "producer": { "type": "string", "minLength": 1 },
+        "consumers": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "migration": { "type": "string", "minLength": 1, "description": "Explicit migration note, including the legacy adapter where one exists." }
       }
     }
   }
