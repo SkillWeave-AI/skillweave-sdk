@@ -20,6 +20,8 @@ jobs:
       - uses: https://github.com/actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install pinned ops-engine
+        run: pip install ops-engine==3.4.2
       - name: Dependency check — pinned ops-engine must be importable
         run: |
           set -euo pipefail
