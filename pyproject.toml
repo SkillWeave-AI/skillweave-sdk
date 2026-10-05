@@ -25,10 +25,16 @@ Repository = "https://git.langevc.com/skillweave/skillweave-sdk"
 where = ["src"]
 
 [tool.setuptools.package-data]
-# The frozen execution contract set lives in schemas/execution/ and must ship
-# with the wheel, so the nested glob is explicit: `schemas/*.json` alone does
-# not recurse into the subdirectory.
-skillweave_sdk = ["py.typed", "schemas/*.json", "schemas/execution/*.json"]
+# The frozen execution contract set lives in schemas/execution/ and the neutral
+# adapter facade contracts live in schemas/adapter/; both must ship with the
+# wheel, so each nested glob is explicit: `schemas/*.json` alone does not
+# recurse into a subdirectory.
+skillweave_sdk = [
+    "py.typed",
+    "schemas/*.json",
+    "schemas/execution/*.json",
+    "schemas/adapter/*.json",
+]
 
 # The version here and the one in schema_version.toml are the same number for the
 # same reason: this repository is structure, not a completed cut. They are checked

@@ -58,6 +58,14 @@ SCHEMA_FILENAMES = (
 #: them through the SDK. The SDK never implements a second workflow runtime.
 EXECUTION_SCHEMA_SUBDIR = "execution"
 
+#: Directory holding the neutral adapter-facade contracts (SW-ADAPT-001). The
+#: SDK owns the descriptor, the credential reference and the search outcome as
+#: *neutral* contracts: they name no concrete provider and no package-format
+#: kind, so the common facade composes domain contracts rather than replacing
+#: them. The existing ``search-provider`` / ``model-provider`` lifecycle
+#: contracts are unchanged and remain valid alongside these.
+ADAPTER_SCHEMA_SUBDIR = "adapter"
+
 #: The frozen execution contract set. ``contract-catalog-v1`` is the SDK-owned
 #: index of the set and does not index itself; ``contract-catalog-record-v1`` is
 #: the ops-engine/router-owned surface published through a separate contract so
@@ -76,11 +84,22 @@ EXECUTION_SCHEMA_FILENAMES = (
     "contract-catalog-record-v1.schema.json",
 )
 
+#: The neutral adapter-facade contract set (SW-ADAPT-001). These are the shared
+#: contracts the common facade and every package-format reader produce and
+#: consume: one neutral adapter descriptor, one credential reference, one typed
+#: search outcome. They live in a subdirectory so the flat core/lifecycle schema
+#: set (and its consumers) is untouched.
+ADAPTER_SCHEMA_FILENAMES = (
+    "adapter-descriptor-v1.schema.json",
+    "credential-reference-v1.schema.json",
+    "search-outcome-v1.schema.json",
+)
+
 # Canonical digest is computed over the sorted-key canonical JSON of every
 # schema, concatenated in sorted-identity order. It changes iff the
-# byte set changes. Covers both the flat core/lifecycle schemas and the nested
-# execution contract set.
-EXPECTED_SCHEMA_DIGEST = "216e5f17057a3ae2a01da41d0493dced60eaceaf330bed913bd3f281dbc164d5"
+# byte set changes. Covers the flat core/lifecycle schemas, the nested
+# execution contract set, and the nested adapter-facade contract set.
+EXPECTED_SCHEMA_DIGEST = "3dd247f604017bac4ff37ff4f3e9b46c5d1bc48fc8ef225de88ec4b6d14d2e64"
 
 
 class SchemaDigestError(Exception):
@@ -138,6 +157,12 @@ def load_registry(schemas_dir: Path | None = None) -> dict[str, dict]:
         if not isinstance(schema_id, str):
             raise SchemaError(f"{filename}: missing string $id")
         registry[schema_id] = schema
+    for filename in ADAPTER_SCHEMA_FILENAMES:
+        schema = read_schema(schemas_dir / ADAPTER_SCHEMA_SUBDIR, filename)
+        schema_id = schema.get("$id")
+        if not isinstance(schema_id, str):
+            raise SchemaError(f"{filename}: missing string $id")
+        registry[schema_id] = schema
     return registry
 
 
@@ -152,6 +177,13 @@ def _contract_files(schemas_dir: Path) -> list[tuple[str, Path]]:
             schemas_dir / EXECUTION_SCHEMA_SUBDIR / filename,
         )
         for filename in EXECUTION_SCHEMA_FILENAMES
+    )
+    files.extend(
+        (
+            f"{ADAPTER_SCHEMA_SUBDIR}/{filename}",
+            schemas_dir / ADAPTER_SCHEMA_SUBDIR / filename,
+        )
+        for filename in ADAPTER_SCHEMA_FILENAMES
     )
     return files
 

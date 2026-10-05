@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from skillweave_sdk.validator import (
+    ADAPTER_SCHEMA_FILENAMES,
     EXPECTED_SCHEMA_DIGEST,
     EXECUTION_SCHEMA_FILENAMES,
     SCHEMA_FILENAMES,
@@ -887,6 +888,7 @@ def _probe_installed(target: Path) -> dict:
         "  'canonical_digest': v.canonical_digest(),\n"
         "  'registry_size': len(v.load_registry()),\n"
         "  'execution_files': sorted(p.name for p in exec_dir.iterdir()),\n"
+        "  'adapter_files': sorted(p.name for p in (files('skillweave_sdk') / 'schemas' / 'adapter').iterdir()),\n"
         "}))\n"
     )
     result = subprocess.run(
@@ -917,13 +919,33 @@ class TestInstalledWheel:
         shipped = {n.rsplit("/", 1)[1] for n in execution}
         assert shipped == set(EXECUTION_SCHEMA_FILENAMES)
 
+    def test_wheel_contains_every_adapter_schema(self, installed_wheel):
+        wheel, _ = installed_wheel
+        with zipfile.ZipFile(wheel) as archive:
+            names = archive.namelist()
+        adapter = [
+            n for n in names
+            if n.startswith("skillweave_sdk/schemas/adapter/") and n.endswith(".json")
+        ]
+        assert len(adapter) == len(ADAPTER_SCHEMA_FILENAMES), (
+            f"wheel ships {len(adapter)} adapter schemas, expected "
+            f"{len(ADAPTER_SCHEMA_FILENAMES)}: {names}"
+        )
+        shipped = {n.rsplit("/", 1)[1] for n in adapter}
+        assert shipped == set(ADAPTER_SCHEMA_FILENAMES)
+
     def test_installed_wheel_imports_with_matching_digest(self, installed_wheel):
         _, target = installed_wheel
         facts = _probe_installed(target)
         # The import resolved to the installed copy, not the source tree.
         assert str(target) in facts["module_file"], facts
         assert facts["execution_files"], "no execution schemas visible after install"
-        assert facts["registry_size"] == len(SCHEMA_FILENAMES) + len(EXECUTION_SCHEMA_FILENAMES)
+        assert facts["adapter_files"], "no adapter schemas visible after install"
+        assert facts["registry_size"] == (
+            len(SCHEMA_FILENAMES)
+            + len(EXECUTION_SCHEMA_FILENAMES)
+            + len(ADAPTER_SCHEMA_FILENAMES)
+        )
         # The digest of the installed bytes equals the frozen digest — proving
         # the wheel carries the exact frozen schemas, not a stale subset.
         assert facts["canonical_digest"] == canonical_digest(SCHEMAS)
