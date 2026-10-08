@@ -18,6 +18,7 @@ claim that schema validation alone provides runtime authentication.
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -950,3 +951,132 @@ class TestInstalledWheel:
         # the wheel carries the exact frozen schemas, not a stale subset.
         assert facts["canonical_digest"] == canonical_digest(SCHEMAS)
         assert facts["canonical_digest"] == EXPECTED_SCHEMA_DIGEST
+
+
+# ---------------------------------------------------------------------------
+# the ownership inventory ships as PACKAGE DATA, not a ``.data/data`` payload
+# ---------------------------------------------------------------------------
+#
+# A ``[tool.setuptools.data-files]`` declaration installs to
+# ``<sys.prefix>/skillweave_sdk/_authority`` -- NOT inside the package -- and is
+# dropped outright by ``pip install --target``. A consumer that reads the
+# ownership inventory through ``importlib.resources.files("skillweave_sdk") /
+# "_authority"`` then finds nothing on a real install, while a hand-rolled
+# extraction that copies ``.data/data`` next to the package makes it appear.
+# These tests pin the payload inside the package and prove it survives a REAL
+# ``pip install``.
+
+#: The packaged ownership inventory, kept byte-identical to the authoritative
+#: root files. The root files stay the source of truth (``contract/`` and
+#: ``schema_version.toml``); the packaged copies are what the wheel ships.
+_PACKAGED_AUTHORITY_DIR = ROOT / "src" / "skillweave_sdk" / "_authority"
+_ROOT_CONTRACT_DIR = ROOT / "contract"
+_AUTHORITY_ROOT_SOURCES = {
+    "contract-lock.json": _ROOT_CONTRACT_DIR / "contract-lock.json",
+    "execution-catalog.json": _ROOT_CONTRACT_DIR / "execution-catalog.json",
+    "run-state.enum.json": _ROOT_CONTRACT_DIR / "run-state.enum.json",
+    "schema_version.toml": ROOT / "schema_version.toml",
+}
+
+
+def test_packaged_authority_copies_equal_the_root_contract_files():
+    """The copies inside the package must equal the authoritative root files.
+
+    The root ``contract/*.json`` and ``schema_version.toml`` remain the source
+    of truth; the packaged copies are duplicated so they land inside the
+    installed package. Duplication is only safe with this equality gate: it
+    fails the moment one copy is edited without the other.
+    """
+    for name, source in _AUTHORITY_ROOT_SOURCES.items():
+        packaged = _PACKAGED_AUTHORITY_DIR / name
+        assert source.is_file(), f"authoritative root file missing: {source}"
+        assert packaged.is_file(), (
+            f"packaged authority file missing: {packaged} — the ownership "
+            f"inventory would not ship inside the installed package"
+        )
+        assert packaged.read_bytes() == source.read_bytes(), (
+            f"{packaged} differs from its authoritative source {source}; the "
+            f"packaged copy must be regenerated from the root file"
+        )
+
+
+def test_packaged_authority_set_has_no_extras():
+    shipped = sorted(p.name for p in _PACKAGED_AUTHORITY_DIR.iterdir() if p.is_file())
+    assert shipped == sorted(_AUTHORITY_ROOT_SOURCES), (
+        f"the packaged _authority set drifted: {shipped}"
+    )
+
+
+class TestInstalledAuthorityPayload:
+    """The inventory is readable through the package path on a real install."""
+
+    def test_no_data_files_payload_declaration_remains(self):
+        # The ``.data/data`` indirection is exactly what located the payload
+        # outside the package. It must not come back. Anchor the *section
+        # header* (start of line), so a comment that merely names the setting
+        # does not trip the check.
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        assert not re.search(r"(?m)^\[tool\.setuptools\.data-files\]", text), (
+            "a data-files payload installs to <sys.prefix>/skillweave_sdk/"
+            "_authority, outside the installed package; use package-data instead"
+        )
+
+    def test_wheel_ships_authority_as_package_data(self, installed_wheel):
+        wheel, _ = installed_wheel
+        with zipfile.ZipFile(wheel) as archive:
+            names = archive.namelist()
+        packaged = sorted(
+            n for n in names if n.startswith("skillweave_sdk/_authority/")
+        )
+        assert len(packaged) == len(_AUTHORITY_ROOT_SOURCES), (
+            f"the wheel ships {len(packaged)} authority files inside the "
+            f"package, expected {len(_AUTHORITY_ROOT_SOURCES)}: {names}"
+        )
+        # And nothing under the ``.data/data`` indirection.
+        assert not [n for n in names if ".data/data/" in n], (
+            "the wheel carries a .data/data payload; the ownership inventory "
+            "must be package data so a pip install keeps it inside the package"
+        )
+
+    def test_installed_package_exposes_the_authority_inventory(self, installed_wheel):
+        """A REAL ``pip install`` keeps the inventory reachable by package path.
+
+        This is the check the defect defeated: the wheel is installed with a
+        real pip (the ``installed_wheel`` fixture) and the payload is read back
+        through ``importlib.resources.files("skillweave_sdk") / "_authority"``
+        in a clean subprocess. Against the data-files layout this is not a
+        directory and the test is red.
+        """
+        _, target = installed_wheel
+        probe = (
+            "import json, sys\n"
+            "sys.path[:] = [p for p in sys.path if p not in ('', '.')]\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "import importlib.resources as R\n"
+            "import skillweave_sdk as S\n"
+            "p = R.files('skillweave_sdk') / '_authority'\n"
+            "print(json.dumps({\n"
+            "  'package_authority_is_dir': p.is_dir(),\n"
+            "  'authority_root_is_dir': S.authority_root().is_dir(),\n"
+            "  'names': sorted(e.name for e in S.authority_root().iterdir()),\n"
+            "  'module_file': S.__file__,\n"
+            "}))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(target)],
+            cwd=str(target), capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin", "PYTHONPATH": ""},
+        )
+        assert result.returncode == 0, (
+            f"importing the installed wheel failed\nstdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+        facts = json.loads(result.stdout.strip().splitlines()[-1])
+        assert str(target) in facts["module_file"], facts
+        assert facts["package_authority_is_dir"] is True, (
+            "importlib.resources.files('skillweave_sdk') / '_authority' is not "
+            "a directory after a real pip install — the ownership inventory "
+            "did not ship inside the package"
+        )
+        assert facts["authority_root_is_dir"] is True, facts
+        assert sorted(facts["names"]) == sorted(_AUTHORITY_ROOT_SOURCES), facts

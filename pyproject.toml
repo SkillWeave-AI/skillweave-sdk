@@ -35,31 +35,25 @@ where = ["src"]
 # adapter facade contracts live in schemas/adapter/; both must ship with the
 # wheel, so each nested glob is explicit: `schemas/*.json` alone does not
 # recurse into a subdirectory.
+#
+# The ownership inventory (the frozen execution contract catalog, its lock and
+# the generated run-state vocabulary extract) and the contract version file
+# travel as PACKAGE DATA inside ``skillweave_sdk/_authority/`` -- part of the
+# package itself, not a ``.data/data`` payload. This is deliberate: a
+# ``[tool.setuptools.data-files]`` payload installs to
+# ``<sys.prefix>/skillweave_sdk/_authority`` (or is dropped entirely by
+# ``pip install --target``), so ``importlib.resources.files("skillweave_sdk") /
+# "_authority"`` would not find it from an installed wheel. Package data lands
+# inside the installed package for every install mode (venv, ``--target``,
+# zip-safe, editable), so the cross-repo consumer can read the authority it
+# verifies against from the installed artifact.
 skillweave_sdk = [
     "py.typed",
     "schemas/*.json",
     "schemas/execution/*.json",
     "schemas/adapter/*.json",
-]
-
-# The ownership inventory (the frozen execution contract catalog, its lock and
-# the generated run-state vocabulary extract) and the contract version file
-# must travel INSIDE the wheel: the cross-repo consumer verifies its ownership
-# map and SDK pin against the *installed* artifact, so an authority file that
-# only exists in the source tree would be unreachable from a consumer that has
-# the wheel and nothing else. They land as ``skillweave_sdk/_authority/*`` in
-# the installed distribution (a PEP 639 ``.data/data`` payload), alongside the
-# package, so ``importlib.resources.files("skillweave_sdk") / "_authority"``
-# reads them from the wheel and from a source checkout identically.
-#
-# Every file is a glob, never a fixed name: setuptools fails the whole build
-# with "can't copy ... does not exist" when a literal data-file is absent, and
-# a source tree newer than this packaging declaration (a renamed or added
-# authority file) must ship it, not break the build.
-[tool.setuptools.data-files]
-"skillweave_sdk/_authority" = [
-    "schema_version*.toml",
-    "contract/*.json",
+    "_authority/*.json",
+    "_authority/*.toml",
 ]
 
 # The version here and the one in schema_version.toml are the same number for the
