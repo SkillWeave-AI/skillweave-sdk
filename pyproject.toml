@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,14 +7,20 @@ name = "skillweave-sdk"
 version = "0.2.0"
 description = "Contract authority for SkillWeave: schemas and the taxonomy value set."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+# PEP 639: SPDX license expression. The setuptools floor above is >=77.0.0
+# because a string license is only honoured by a PEP 639-compatible backend,
+# and the deprecated `License ::` classifier is mutually exclusive with it.
+license = "Apache-2.0"
 authors = [{ name = "LangeVC.com" }]
 requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dependencies = []
 
@@ -34,6 +40,26 @@ skillweave_sdk = [
     "schemas/*.json",
     "schemas/execution/*.json",
     "schemas/adapter/*.json",
+]
+
+# The ownership inventory (the frozen execution contract catalog, its lock and
+# the generated run-state vocabulary extract) and the contract version file
+# must travel INSIDE the wheel: the cross-repo consumer verifies its ownership
+# map and SDK pin against the *installed* artifact, so an authority file that
+# only exists in the source tree would be unreachable from a consumer that has
+# the wheel and nothing else. They land as ``skillweave_sdk/_authority/*`` in
+# the installed distribution (a PEP 639 ``.data/data`` payload), alongside the
+# package, so ``importlib.resources.files("skillweave_sdk") / "_authority"``
+# reads them from the wheel and from a source checkout identically.
+#
+# Every file is a glob, never a fixed name: setuptools fails the whole build
+# with "can't copy ... does not exist" when a literal data-file is absent, and
+# a source tree newer than this packaging declaration (a renamed or added
+# authority file) must ship it, not break the build.
+[tool.setuptools.data-files]
+"skillweave_sdk/_authority" = [
+    "schema_version*.toml",
+    "contract/*.json",
 ]
 
 # The version here and the one in schema_version.toml are the same number for the
