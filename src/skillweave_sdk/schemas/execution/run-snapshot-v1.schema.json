@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/run-snapshot/v1",
+  "title": "Run Snapshot v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Durable, replayable snapshot of one run at a committed event cursor. methodology, autonomy_policy and session_schedule are three distinct required fields and must never be conflated into one mode string. process_identity is a native handle object issued by the trusted run service; a model-authored string is not a native handle and will fail validation. authority_decision_digest identifies the trusted-service decision that admitted the snapshot. NOTE: this schema validates untrusted wire data only. It does not authenticate the issuer; the runtime must obtain the authenticated principal from the trusted service seam.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "version",
+    "task_id",
+    "attempt",
+    "state",
+    "gate_state",
+    "methodology",
+    "autonomy_policy",
+    "session_schedule",
+    "subject_digest",
+    "brief_digest",
+    "envelope_digest",
+    "process_identity",
+    "event_cursor",
+    "authority_decision_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "description": "Wire-contract version. Unknown versions fail closed."
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic snapshot revision, not the wire-contract version."
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "state": {
+      "$ref": "https://skillweave.dev/schemas/run-state/v1#/properties/state",
+      "description": "Lifecycle state; the value set is owned by the shared run-state contract."
+    },
+    "gate_state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "methodology": {
+      "enum": ["assay", "rex", "ralph", "gauntlet"],
+      "description": "Methodology field. Distinct from autonomy_policy and session_schedule."
+    },
+    "autonomy_policy": {
+      "enum": ["conservative", "medium", "unicorn"],
+      "description": "Autonomy policy field. Distinct from methodology and session_schedule."
+    },
+    "session_schedule": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Session schedule field. Distinct from methodology and autonomy_policy; a schedule never implies an autonomy grant."
+    },
+    "subject_digest": { "$ref": "#/$defs/digest" },
+    "brief_digest": { "$ref": "#/$defs/digest" },
+    "envelope_digest": { "$ref": "#/$defs/digest" },
+    "process_identity": {
+      "$ref": "#/$defs/native_handle",
+      "description": "Native process handle issued by the trusted run service. A model-authored string is not a native handle."
+    },
+    "event_cursor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "authority_decision_digest": {
+      "$ref": "#/$defs/digest",
+      "description": "Digest of the trusted-service authority decision that admitted this snapshot. Not attestation by itself."
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "native_handle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle_id", "service_principal"],
+      "properties": {
+        "handle_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "description": "Opaque handle identifier issued by a trusted native service."
+        },
+        "service_principal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Authenticated principal of the trusted service that issued the handle. Wire-recorded here; authentication happens at the service seam."
+        }
+      }
+    }
+  }
+}

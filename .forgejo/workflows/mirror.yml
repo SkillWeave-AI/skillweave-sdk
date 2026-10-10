@@ -1,12 +1,24 @@
-name: Mirror to GitHub
-
-# Forgejo is canonical; GitHub (LangeVC/skillweave-sdk) is the public read-only
-# mirror. Force-push exactly the ref that triggered the run.
+# ops-engine v3.4.2 mirror workflow (install-free engine, contract-driven).
+#
+# Forgejo is canonical; GitHub (SkillWeave-AI/skillweave-sdk) is the public
+# read-only mirror. Force-push exactly the ref that triggered the run.
+#
+# Install-free: this workflow provisions NO engine -- no wheel is fetched, no
+# artifact digest is verified, no version is read from an Actions variable. The
+# cited ops-engine v3.4.2 that ships this workflow is the runner's environment,
+# not something the job installs. The only operator-provided material the job
+# needs is the secret GH_MIRROR_TOKEN.
+#
+# The destinations live in .ops.yaml, not in this file: the scan step below
+# reads the manifest and selects the forge the run mirrors TO, so the GitHub
+# owner/name is never restated as a literal in an env or in the push command.
 #
 # exact-ref Muster (LVC-MIR-G0, 2026-07-28), identisch zum Core-Repo.
 # Important for the initial fill: an empty repository can only be populated
 # through a real ref. The first push to main has to create a main on GitHub, and
 # the exact-ref pattern does that because it mirrors the triggering ref back.
+
+name: Mirror to GitHub
 
 on:
   push:
@@ -18,6 +30,9 @@ on:
         description: 'Ref zum Nachspiegeln (z.B. refs/tags/v1.0.0)'
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   mirror:
     runs-on: ubuntu-latest
@@ -25,10 +40,67 @@ jobs:
       - uses: https://github.com/actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Resolve mirror destination from .ops.yaml
+        run: |
+          set -euo pipefail
+          # DESTINATION_SCAN
+          destination="$(python3 - <<'DEST_PY'
+          import sys, yaml
+          # Read the committed ops manifest and select the mirror destination:
+          # the forge that is not the canonical Forgejo source. The manifest,
+          # not this workflow, is the source of truth for the destination -- the
+          # GitHub owner/name is never a literal in an env or in the push command.
+          with open(".ops.yaml", encoding="utf-8") as handle:
+              manifest = yaml.safe_load(handle)
+          destinations = manifest["destinations"]
+          sources = [d for d in destinations if d["forge"] == "forgejo"]
+          mirrors = [d for d in destinations if d["forge"] != "forgejo"]
+          if len(sources) != 1 or len(mirrors) != 1:
+              print(
+                  "::error::expected one forgejo source and one mirror "
+                  f"destination, got {len(sources)} and {len(mirrors)}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print(f"{mirrors[0]['owner']}/{mirrors[0]['name']}")
+          DEST_PY
+          )"
+          [ -n "${destination}" ] || { echo "error: destination scan returned empty" >&2; exit 1; }
+          echo "mirror destination: ${destination}"
+          echo "GH_REPO=${destination}" >> "${GITHUB_ENV:?GITHUB_ENV unset}"
+
+      - name: Preflight — prove destination before any push
+        env:
+          GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          GH_EXPECTED_VISIBILITY: "public"
+        run: |
+          set -euo pipefail
+          python3 - "${GH_REPO:?GH_REPO unset}" "${GH_MIRROR_TOKEN:-}" "${GH_EXPECTED_VISIBILITY:-}" <<'PROVE_PY'
+          import asyncio, sys
+          from ops_engine.modules.mirror import MirrorHandler, MirrorDestinationError
+
+          async def main():
+              destination = sys.argv[1]
+              token = sys.argv[2] if sys.argv[2] else None
+              visibility = sys.argv[3] if sys.argv[3] else None
+              try:
+                  await MirrorHandler.prove_destination(
+                      destination, token=token,
+                      expected_visibility=visibility,
+                  )
+              except MirrorDestinationError as exc:
+                  print(f"::error::preflight: {exc}", file=sys.stderr)
+                  sys.exit(1)
+          asyncio.run(main())
+          PROVE_PY
+          echo "preflight: ${GH_REPO} verified."
+
       - name: Push to GitHub mirror
         env:
           GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
           MIRROR_REF: ${{ inputs.ref || github.ref }}
         run: |
-          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/LangeVC/skillweave-sdk.git"
+          set -euo pipefail
+          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/${GH_REPO:?GH_REPO unset}.git"
           git push --force "$remote" "+${MIRROR_REF}:${MIRROR_REF}"

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/route-decision/v1",
+  "title": "Route Decision v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Router decision for one request, keeping requested, resolved and answering identity as separate facts. attribution_status records whether the answering model is known; 'unknown' is honest and never coerced to a definitive value, and answering_model is then the empty string. The router supplies this record; it does not become a duplicate lifecycle controller.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "task_id", "attempt", "request_id",
+    "parent_request_id", "requested_model", "resolved_provider", "resolved_model",
+    "answering_model", "attribution_status", "catalog_revision", "policy_revision",
+    "reservation_id", "attempt_order", "measured_at", "outcome", "usage"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "parent_request_id": { "type": "string", "description": "Empty string for a root request, otherwise the parent request id." },
+    "requested_model": { "type": "string", "minLength": 1, "description": "Alias the caller asked for; the bound provider is not silently aliased to it." },
+    "resolved_provider": { "type": "string", "minLength": 1 },
+    "resolved_model": { "type": "string", "minLength": 1 },
+    "answering_model": {
+      "type": "string",
+      "description": "Observed answering identity, or the empty string when it could not be observed. Never inferred from the request."
+    },
+    "attribution_status": { "enum": ["answered", "substituted", "unavailable", "rate_limited", "errored", "unknown"] },
+    "catalog_revision": { "type": "string", "minLength": 1 },
+    "policy_revision": { "type": "string", "minLength": 1 },
+    "reservation_id": { "type": "string", "minLength": 1, "description": "Reservation that funded this request. A request with no reservation is not admissible." },
+    "attempt_order": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "measured_at": { "type": "string", "minLength": 1, "format": "date-time" },
+    "outcome": { "type": "string", "minLength": 1 },
+    "usage": {
+      "type": "object",
+      "description": "Observed usage when available; usage_status='unknown' means the value is unavailable and stays reserved.",
+      "properties": {
+        "usage_status": { "enum": ["unknown", "measured"] }
+      }
+    }
+  }
+}

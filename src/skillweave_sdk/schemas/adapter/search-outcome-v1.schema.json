@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/adapter/search-outcome/v1",
+  "title": "Search Outcome",
+  "description": "The typed, provider-neutral outcome of a search operation. A success carries at least one real source with an http(s) URL; a non-success carries no sources (an outage is never dressed up as a retrieved source). Attempts record which transport was tried and how it ended, so a configured fallback is visibly attributed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "query_sha256",
+    "requested_provider",
+    "status",
+    "results",
+    "attempts"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Unknown major versions fail closed: the facade never best-effort parses a future contract.",
+      "const": "1.0.0"
+    },
+    "query_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "requested_provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "success",
+        "blocked",
+        "error",
+        "unavailable",
+        "cancelled"
+      ]
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "url",
+          "snippet",
+          "source",
+          "provider"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https?://"
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "synthesis": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "transport",
+          "status"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "minLength": 1
+          },
+          "transport": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "error_code": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "error_code": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "retry_after_seconds": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "number",
+          "minimum": 0
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "description": "A success must carry at least one real source.",
+      "if": {
+        "properties": {
+          "status": {
+            "const": "success"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "results": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "description": "A non-success status must carry no results: a failure is not a retrieved source. Written as 'const: []' so the SDK's dependency-free validator enforces it with only its supported keyword subset.",
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "blocked",
+              "error",
+              "unavailable",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "results": {
+            "const": []
+          }
+        }
+      }
+    }
+  ]
+}

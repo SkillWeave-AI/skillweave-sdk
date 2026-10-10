@@ -1,20 +1,26 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "skillweave-sdk"
-version = "0.2.0"
+version = "0.3.0"
 description = "Contract authority for SkillWeave: schemas and the taxonomy value set."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+# PEP 639: SPDX license expression. The setuptools floor above is >=77.0.0
+# because a string license is only honoured by a PEP 639-compatible backend,
+# and the deprecated `License ::` classifier is mutually exclusive with it.
+license = "Apache-2.0"
 authors = [{ name = "LangeVC.com" }]
 requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dependencies = []
 
@@ -25,7 +31,30 @@ Repository = "https://git.langevc.com/skillweave/skillweave-sdk"
 where = ["src"]
 
 [tool.setuptools.package-data]
-skillweave_sdk = ["py.typed", "schemas/*.json"]
+# The frozen execution contract set lives in schemas/execution/ and the neutral
+# adapter facade contracts live in schemas/adapter/; both must ship with the
+# wheel, so each nested glob is explicit: `schemas/*.json` alone does not
+# recurse into a subdirectory.
+#
+# The ownership inventory (the frozen execution contract catalog, its lock and
+# the generated run-state vocabulary extract) and the contract version file
+# travel as PACKAGE DATA inside ``skillweave_sdk/_authority/`` -- part of the
+# package itself, not a ``.data/data`` payload. This is deliberate: a
+# ``[tool.setuptools.data-files]`` payload installs to
+# ``<sys.prefix>/skillweave_sdk/_authority`` (or is dropped entirely by
+# ``pip install --target``), so ``importlib.resources.files("skillweave_sdk") /
+# "_authority"`` would not find it from an installed wheel. Package data lands
+# inside the installed package for every install mode (venv, ``--target``,
+# zip-safe, editable), so the cross-repo consumer can read the authority it
+# verifies against from the installed artifact.
+skillweave_sdk = [
+    "py.typed",
+    "schemas/*.json",
+    "schemas/execution/*.json",
+    "schemas/adapter/*.json",
+    "_authority/*.json",
+    "_authority/*.toml",
+]
 
 # The version here and the one in schema_version.toml are the same number for the
 # same reason: this repository is structure, not a completed cut. They are checked

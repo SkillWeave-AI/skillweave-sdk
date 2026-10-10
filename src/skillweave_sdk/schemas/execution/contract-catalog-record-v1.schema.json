@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/contract-catalog-record/v1",
+  "title": "Contract Catalog Record v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Wire contract through which the existing ops-engine/router-owned catalog surface is published. The SDK does not become the router's lifecycle controller by defining this record shape: inclusion is a boundary freeze, not a transfer of ownership.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_revision", "surface_owner", "surface_revision", "digest_algorithm", "surface_digests", "compatibility"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "record_revision": { "type": "string", "minLength": 1 },
+    "surface_owner": { "type": "string", "minLength": 1 },
+    "surface_revision": { "type": "string", "minLength": 1 },
+    "digest_algorithm": { "type": "string", "const": "sha256" },
+    "surface_digests": { "type": "object" },
+    "compatibility": { "type": "object" }
+  }
+}

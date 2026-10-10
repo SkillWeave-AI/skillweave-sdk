@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/reservation/v1",
+  "title": "Reservation v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). One admission-ledger entry for one request, including retries and children. There is exactly one reservation authority; Core and the gateway keep no independently spendable counters. Every request carries a reservation, and missing usage remains reserved rather than being released as free. usage_status 'unknown' is retained explicitly and is never coerced to zero.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "reservation_id", "envelope_id", "run_id", "task_id",
+    "attempt", "request_id", "parent_request_id", "expires_at",
+    "request_bytes", "reserved_tokens", "max_output_tokens", "state", "issuer"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "reservation_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "envelope_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "request_id": { "type": "string", "minLength": 1, "description": "Gateway/native request id. Required; a request without a correlation id is not admissible." },
+    "parent_request_id": { "type": "string", "description": "Empty string for a root request, otherwise the parent request id. Nested children are accounted here too." },
+    "expires_at": { "type": "string", "minLength": 1, "format": "date-time" },
+    "request_bytes": { "type": "integer", "minimum": 0 },
+    "reserved_tokens": { "type": "integer", "minimum": 1, "description": "Reserved tokens are held until observed usage is recorded; unknown usage stays reserved." },
+    "max_output_tokens": { "type": "integer", "minimum": 1 },
+    "state": { "type": "string", "minLength": 1 },
+    "usage_status": {
+      "enum": ["unknown", "measured"],
+      "description": "Unknown usage is a distinct retained state, never zero."
+    },
+    "issuer": { "type": "string", "minLength": 1, "description": "Authenticated reservation authority. Not a worker-supplied string." }
+  }
+}
