@@ -1,0 +1,67 @@
+# skillweave-sdk — release version surfaces
+#
+# Schema 1: source-of-truth driven location manifest consumed by
+# ops-engine/scripts/version-sync.py to verify all declared version
+# surfaces agree before a release.
+schema: 1
+source_of_truth: pyproject.toml
+
+# Every file that carries the SDK distribution version.  Each entry
+# declares the path (relative to repository root), the regex pattern
+# whose first capture group is the version string, and whether the
+# surface is required (true) or optional (false).  Surfaces that share
+# a file use separate entries with distinct patterns.
+locations:
+  # 1. pyproject.toml — the single source of truth
+  - path: pyproject.toml
+    pattern: '(?m)^version = "([^"]+)"'
+    context: '[project]'
+    required: true
+
+  # 2. schema_version.toml — [schema] version, root of the release graph
+  - path: schema_version.toml
+    pattern: '(?m)^version = "([^"]+)"'
+    context: '[schema]'
+    required: true
+
+  # 3. src/skillweave_sdk/__init__.py — distribution version string
+  - path: src/skillweave_sdk/__init__.py
+    pattern: '(?m)^__version__ = "([^"]+)"'
+    required: true
+
+  # 4. src/skillweave_sdk/__init__.py — canonical schema version
+  - path: src/skillweave_sdk/__init__.py
+    pattern: '(?m)^SCHEMA_VERSION = "([^"]+)"'
+    required: true
+
+  # 5. contract/execution-catalog.json — frozen execution contract catalog (source tree)
+  - path: contract/execution-catalog.json
+    pattern: '"sdk_version": "([^"]+)"'
+    required: true
+
+  # 6. src/skillweave_sdk/_authority/execution-catalog.json — installed package data copy
+  - path: src/skillweave_sdk/_authority/execution-catalog.json
+    pattern: '"sdk_version": "([^"]+)"'
+    required: true
+
+  # 7. contract/run-state.enum.json — generated run-state vocabulary extract (source tree)
+  - path: contract/run-state.enum.json
+    pattern: '"schema_version": "([^"]+)"'
+    required: true
+
+  # 8. src/skillweave_sdk/_authority/schema_version.toml — installed package data copy
+  - path: src/skillweave_sdk/_authority/schema_version.toml
+    pattern: '(?m)^version = "([^"]+)"'
+    context: '[schema]'
+    required: true
+
+  # 9. src/skillweave_sdk/_authority/run-state.enum.json — packaged copy of contract/run-state.enum.json
+  - path: src/skillweave_sdk/_authority/run-state.enum.json
+    pattern: '"schema_version": "([^"]+)"'
+    required: true
+
+# Release title policy (flat scalars consumed by the release workflow title gate).
+# The pattern supports {product} substitution from product_name.
+product_name: SkillWeave SDK
+pattern: '^{product} v[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?$'
+changelog_path: CHANGELOG.md
