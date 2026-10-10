@@ -1,7 +1,24 @@
-name: Mirror to GitHub
-
+# ops-engine v3.4.2 mirror workflow (install-free engine, contract-driven).
+#
 # Forgejo is canonical; GitHub (SkillWeave-AI/skillweave-sdk) is the public
 # read-only mirror. Force-push exactly the ref that triggered the run.
+#
+# Install-free: this workflow provisions NO engine -- no wheel is fetched, no
+# artifact digest is verified, no version is read from an Actions variable. The
+# cited ops-engine v3.4.2 that ships this workflow is the runner's environment,
+# not something the job installs. The only operator-provided material the job
+# needs is the secret GH_MIRROR_TOKEN.
+#
+# The destinations live in .ops.yaml, not in this file: the scan step below
+# reads the manifest and selects the forge the run mirrors TO, so the GitHub
+# owner/name is never restated as a literal in an env or in the push command.
+#
+# exact-ref Muster (LVC-MIR-G0, 2026-07-28), identisch zum Core-Repo.
+# Important for the initial fill: an empty repository can only be populated
+# through a real ref. The first push to main has to create a main on GitHub, and
+# the exact-ref pattern does that because it mirrors the triggering ref back.
+
+name: Mirror to GitHub
 
 on:
   push:
@@ -13,6 +30,9 @@ on:
         description: 'Ref zum Nachspiegeln (z.B. refs/tags/v1.0.0)'
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   mirror:
     runs-on: ubuntu-latest
@@ -20,120 +40,54 @@ jobs:
       - uses: https://github.com/actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Provision pinned ops-engine (operator-issued immutable artifact)
-        env:
-          OPS_ENGINE_VERSION: ${{ vars.OPS_ENGINE_VERSION }}
-          OPS_ENGINE_WHEEL_URL: ${{ vars.OPS_ENGINE_WHEEL_URL }}
-          OPS_ENGINE_WHEEL_SHA256: ${{ vars.OPS_ENGINE_WHEEL_SHA256 }}
+
+      - name: Resolve mirror destination from .ops.yaml
         run: |
           set -euo pipefail
-          fail() { echo "::error::pinned-engine: $*" >&2; exit 1; }
-
-          # The generic shared engine is provisioned HERE, per job, from an
-          # operator-selected IMMUTABLE release artifact.  Nothing about the
-          # engine comes from the runner image: the runner image is unspecified,
-          # so a bare preinstalled import is not a reproducible dependency.  The
-          # pin is an exact version plus the artifact SHA256 (Actions variables),
-          # and the artifact BYTES are enforced below -- the wheel is not
-          # installed until its bytes match the pin.  Every failure is
-          # fail-closed.  See docs/mirror-migration.md.
-          [ -n "${OPS_ENGINE_VERSION:-}" ] || fail "OPS_ENGINE_VERSION is unset. Set the operator Actions variable to the exact immutable ops-engine version."
-          [ -n "${OPS_ENGINE_WHEEL_URL:-}" ] || fail "OPS_ENGINE_WHEEL_URL is unset. Set it to the https URL of the immutable ops-engine wheel."
-          [ -n "${OPS_ENGINE_WHEEL_SHA256:-}" ] || fail "OPS_ENGINE_WHEEL_SHA256 is unset. Set it to the SHA256 of that exact wheel."
-
-          if ! [[ "${OPS_ENGINE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            fail "OPS_ENGINE_VERSION '${OPS_ENGINE_VERSION}' is malformed (expected MAJOR.MINOR.PATCH)."
-          fi
-          case "${OPS_ENGINE_WHEEL_URL}" in
-            https://*) ;;
-            *) fail "OPS_ENGINE_WHEEL_URL must be an https URL; refusing '${OPS_ENGINE_WHEEL_URL}'." ;;
-          esac
-          if ! [[ "${OPS_ENGINE_WHEEL_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
-            fail "OPS_ENGINE_WHEEL_SHA256 must be 64 lowercase hex characters."
-          fi
-          [ "${OPS_ENGINE_VERSION}" != "3.4.2" ] || fail "OPS_ENGINE_VERSION 3.4.2 is the old published artifact and lacks the exact-identity ABI; pin a release that carries it."
-
-          wheel="${RUNNER_TEMP}/$(basename "${OPS_ENGINE_WHEEL_URL}")"
-          curl -fsSL "${OPS_ENGINE_WHEEL_URL}" -o "${wheel}"
-          actual="$(python3 - "${wheel}" <<'SHA_PY'
-          import hashlib, sys
-          print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
-          SHA_PY
-          )"
-          [ "${actual}" = "${OPS_ENGINE_WHEEL_SHA256}" ] || fail "downloaded wheel sha256 ${actual} != pinned ${OPS_ENGINE_WHEEL_SHA256}; refusing to install unverified bytes."
-
-          lib="${RUNNER_TEMP}/ops-engine-lib"
-          python3 -m pip install --disable-pip-version-check --no-input --target "${lib}" "${wheel}"
-          got="$(PYTHONPATH="${lib}${PYTHONPATH:+:${PYTHONPATH}}" python3 -c 'import importlib.metadata as m; print(m.version("ops-engine"))')"
-          [ "${got}" = "${OPS_ENGINE_VERSION}" ] || fail "installed ops-engine version ${got} != pinned ${OPS_ENGINE_VERSION}."
-          echo "PYTHONPATH=${lib}${PYTHONPATH:+:${PYTHONPATH}}" >> "${GITHUB_ENV:?GITHUB_ENV unset}"
-          echo "pinned-engine: installed ops-engine ${got} (sha256 ${actual})"
-      - name: Dependency check — operator-issued immutable engine with required ABI
-        run: |
-          set -euo pipefail
-          python3 - <<'DEP_PY'
-          import importlib.metadata as md, sys, inspect
-          from ops_engine.modules.mirror import MirrorHandler, MirrorDestinationError
-
-          # The pinned engine is installed by the preceding provisioning step
-          # (from the operator-selected immutable artifact) and imported here
-          # through the PYTHONPATH it exported.  This step verifies that PINNED
-          # artifact carries the exact-identity ABI before any preflight or push:
-          # an ABI guard on whatever the runner image happened to preinstall
-          # would not be a reproducible dependency.  The artifact pin and the
-          # pending external release dependency are in docs/mirror-migration.md.
-          try:
-              got = md.version("ops-engine")
-          except md.PackageNotFoundError:
-              print("::error::ops-engine is NOT INSTALLED. "
-                    "The preflight guard requires an operator-issued ops-engine "
-                    "installed in the runner image or via CI setup. "
-                    "See docs/mirror-migration.md for the shared-engine requirement.",
-                    file=sys.stderr)
+          # DESTINATION_SCAN
+          destination="$(python3 - <<'DEST_PY'
+          import sys, yaml
+          # Read the committed ops manifest and select the mirror destination:
+          # the forge that is not the canonical Forgejo source. The manifest,
+          # not this workflow, is the source of truth for the destination -- the
+          # GitHub owner/name is never a literal in an env or in the push command.
+          with open(".ops.yaml", encoding="utf-8") as handle:
+              manifest = yaml.safe_load(handle)
+          destinations = manifest["destinations"]
+          sources = [d for d in destinations if d["forge"] == "forgejo"]
+          mirrors = [d for d in destinations if d["forge"] != "forgejo"]
+          if len(sources) != 1 or len(mirrors) != 1:
+              print(
+                  "::error::expected one forgejo source and one mirror "
+                  f"destination, got {len(sources)} and {len(mirrors)}",
+                  file=sys.stderr,
+              )
               sys.exit(1)
-
-          # Verify the exact identity ABI that the old published artifact lacks.
-          sig = inspect.signature(MirrorHandler.prove_destination)
-          for kw in ("expected_visibility", "expected_repository_id"):
-              if kw not in sig.parameters:
-                  print("::error::ops-engine {} MirrorHandler.prove_destination "
-                        "lacks required kwarg {!r}. "
-                        "The installed engine is the old published artifact which "
-                        "does not support exact identity checks. "
-                        "Install the operator-issued immutable engine with the "
-                        "required ABI. "
-                        "See docs/mirror-migration.md.".format(got, kw),
-                        file=sys.stderr)
-                  sys.exit(1)
-
-          print("dependency check: ops-engine {} OK, prove_destination accepts "
-                "expected_visibility and expected_repository_id".format(got))
-          DEP_PY
-
+          print(f"{mirrors[0]['owner']}/{mirrors[0]['name']}")
+          DEST_PY
+          )"
+          [ -n "${destination}" ] || { echo "error: destination scan returned empty" >&2; exit 1; }
+          echo "mirror destination: ${destination}"
+          echo "GH_REPO=${destination}" >> "${GITHUB_ENV:?GITHUB_ENV unset}"
 
       - name: Preflight — prove destination before any push
         env:
           GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
-          GH_REPO: "SkillWeave-AI/skillweave-sdk"
           GH_EXPECTED_VISIBILITY: "public"
-          GH_EXPECTED_REPOSITORY_ID: "1331291180"
         run: |
           set -euo pipefail
-          python3 - "${GH_REPO}" "${GH_MIRROR_TOKEN:-}" "${GH_EXPECTED_VISIBILITY:-}" "${GH_EXPECTED_REPOSITORY_ID:-}" <<'PROVE_PY'
-          import asyncio, os, sys
+          python3 - "${GH_REPO:?GH_REPO unset}" "${GH_MIRROR_TOKEN:-}" "${GH_EXPECTED_VISIBILITY:-}" <<'PROVE_PY'
+          import asyncio, sys
           from ops_engine.modules.mirror import MirrorHandler, MirrorDestinationError
 
           async def main():
               destination = sys.argv[1]
               token = sys.argv[2] if sys.argv[2] else None
               visibility = sys.argv[3] if sys.argv[3] else None
-              repo_id_str = sys.argv[4]
-              repo_id = int(repo_id_str) if repo_id_str else None
               try:
                   await MirrorHandler.prove_destination(
                       destination, token=token,
                       expected_visibility=visibility,
-                      expected_repository_id=repo_id,
                   )
               except MirrorDestinationError as exc:
                   print(f"::error::preflight: {exc}", file=sys.stderr)
@@ -141,10 +95,12 @@ jobs:
           asyncio.run(main())
           PROVE_PY
           echo "preflight: ${GH_REPO} verified."
+
       - name: Push to GitHub mirror
         env:
           GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
           MIRROR_REF: ${{ inputs.ref || github.ref }}
         run: |
-          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/SkillWeave-AI/skillweave-sdk.git"
+          set -euo pipefail
+          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/${GH_REPO:?GH_REPO unset}.git"
           git push --force "$remote" "+${MIRROR_REF}:${MIRROR_REF}"
