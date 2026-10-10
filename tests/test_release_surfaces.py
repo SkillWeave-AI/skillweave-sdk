@@ -66,3 +66,23 @@ def test_all_declared_surfaces_match_pyproject():
         raise AssertionError(
             "Version surface drift detected:\n" + "\n".join(f"  - {e}" for e in errors)
         )
+
+
+def test_release_title_policy_flat_scalars_present():
+    """Assert .version.yaml carries flat product_name, pattern and changelog_path."""
+    manifest = yaml.safe_load((ROOT / ".version.yaml").read_text(encoding="utf-8"))
+    product_name = manifest.get("product_name")
+    assert product_name, "product_name not found or empty in .version.yaml"
+    assert isinstance(product_name, str), "product_name must be a string"
+    pattern = manifest.get("pattern")
+    assert pattern, "pattern not found or empty in .version.yaml"
+    assert isinstance(pattern, str), "pattern must be a string"
+    assert "\\{product\\}" in pattern or "{product}" in pattern, (
+        "pattern must contain {product} substitution placeholder"
+    )
+    changelog_path = manifest.get("changelog_path")
+    assert changelog_path, "changelog_path not found or empty in .version.yaml"
+    assert isinstance(changelog_path, str), "changelog_path must be a string"
+    assert (ROOT / changelog_path).is_file(), (
+        f"changelog_path {changelog_path!r} does not point to an existing file"
+    )

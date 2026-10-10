@@ -55,8 +55,8 @@ locations:
     context: '[schema]'
     required: true
 
-# Policy for constructing release titles from the version number.
-release_title_policy:
-  prefix: "Release SDK"
-  format: "v{major}.{minor}.{patch}"
-  heading_markdown: "## v{version}"
+# Release title policy (flat scalars consumed by the release workflow title gate).
+# The pattern supports {product} substitution from product_name.
+product_name: SkillWeave SDK
+pattern: '^{product} v[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?$'
+changelog_path: CHANGELOG.md
