@@ -13,6 +13,56 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Per-suffix patterns that identify files carrying a version *declaration*
+# (not just a reference in a string literal).  JSON keys like sdk_version
+# and schema_version only appear in .json files; version/__version__/
+# SCHEMA_VERSION assignments appear in .toml and .py files.
+_VERSION_PATTERNS: dict[str, list[re.Pattern]] = {
+    ".toml": [
+        re.compile(r'^version\s*=\s*"[0-9]+\.[0-9]+\.[0-9]+"', re.MULTILINE),
+    ],
+    ".py": [
+        re.compile(r'^__version__\s*=\s*"[0-9]+\.[0-9]+\.[0-9]+"', re.MULTILINE),
+        re.compile(r'^SCHEMA_VERSION\s*=\s*"[0-9]+\.[0-9]+\.[0-9]+"', re.MULTILINE),
+    ],
+    ".json": [
+        re.compile(r'"sdk_version"\s*:\s*"[0-9]+\.[0-9]+\.[0-9]+"'),
+        re.compile(r'"schema_version"\s*:\s*"[0-9]+\.[0-9]+\.[0-9]+"'),
+    ],
+}
+
+# Subdirectory prefixes to exclude from version-file discovery.
+_EXCLUDED_PREFIXES = ("tests/", "docs/", ".git/", "__pycache__/")
+
+
+def _discover_version_files() -> set[str]:
+    """Return the set of relative paths of files that declare a version string.
+
+    Scans every non-excluded file in the repository tree and checks for version
+    declaration patterns scoped by file suffix.  This discovers the actual version
+    surfaces so the test can compare them against the .version.yaml manifest
+    without hardcoding paths.
+    """
+    found: set[str] = set()
+    for f in ROOT.rglob("*"):
+        if not f.is_file():
+            continue
+        rel = str(f.relative_to(ROOT))
+        if any(rel.startswith(prefix) for prefix in _EXCLUDED_PREFIXES):
+            continue
+        patterns = _VERSION_PATTERNS.get(f.suffix)
+        if patterns is None:
+            continue
+        try:
+            content = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for pat in patterns:
+            if pat.search(content):
+                found.add(rel)
+                break
+    return found
+
 
 def _pyproject_version() -> str:
     """Return the version string from pyproject.toml."""
@@ -23,14 +73,18 @@ def _pyproject_version() -> str:
     return match.group(1)
 
 
-def test_all_declared_surfaces_match_pyproject():
+def _load_manifest() -> dict:
+    """Load and validate .version.yaml."""
     version_manifest = ROOT / ".version.yaml"
     assert version_manifest.is_file(), ".version.yaml not found"
-
     manifest = yaml.safe_load(version_manifest.read_text(encoding="utf-8"))
     assert manifest.get("schema") == 1, ".version.yaml must use schema 1"
     assert manifest.get("source_of_truth") == "pyproject.toml"
+    return manifest
 
+
+def test_all_declared_surfaces_match_pyproject():
+    manifest = _load_manifest()
     expected = _pyproject_version()
 
     locations = manifest.get("locations", [])
@@ -51,9 +105,7 @@ def test_all_declared_surfaces_match_pyproject():
         content = full_path.read_text(encoding="utf-8")
         match = re.search(pattern, content)
         if not match:
-            errors.append(
-                f"Pattern did not match in {path}: {pattern!r}"
-            )
+            errors.append(f"Pattern did not match in {path}: {pattern!r}")
             continue
 
         found = match.group(1)
@@ -65,6 +117,37 @@ def test_all_declared_surfaces_match_pyproject():
     if errors:
         raise AssertionError(
             "Version surface drift detected:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
+
+
+def test_declared_surfaces_cover_all_version_files():
+    """Assert .version.yaml locations cover every version-carrying file in the tree.
+
+    This discovers version files dynamically rather than hardcoding paths, so
+    the test stays in sync when surfaces are added or removed.
+    """
+    manifest = _load_manifest()
+    declared_paths = {entry["path"] for entry in manifest.get("locations", [])}
+    actual_files = _discover_version_files()
+
+    missing = sorted(actual_files - declared_paths)
+    extra = sorted(declared_paths - actual_files)
+
+    errors = []
+    if missing:
+        errors.append(
+            f"Version files not declared in .version.yaml locations:\n"
+            + "\n".join(f"  - {p}" for p in missing)
+        )
+    if extra:
+        errors.append(
+            f".version.yaml declares non-version files (not found in tree scan):\n"
+            + "\n".join(f"  - {p}" for p in extra)
+        )
+
+    if errors:
+        raise AssertionError(
+            "Version surface coverage mismatch:\n" + "\n".join(errors)
         )
 
 

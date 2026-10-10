@@ -55,6 +55,11 @@ locations:
     context: '[schema]'
     required: true
 
+  # 9. src/skillweave_sdk/_authority/run-state.enum.json — packaged copy of contract/run-state.enum.json
+  - path: src/skillweave_sdk/_authority/run-state.enum.json
+    pattern: '"schema_version": "([^"]+)"'
+    required: true
+
 # Release title policy (flat scalars consumed by the release workflow title gate).
 # The pattern supports {product} substitution from product_name.
 product_name: SkillWeave SDK
