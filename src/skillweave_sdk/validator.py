@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,10 +52,54 @@ SCHEMA_FILENAMES = (
     "subject-ref.schema.json",
 )
 
+#: Directory (relative to a schema root) holding the frozen execution
+#: contract set (SW-1510-CONTRACT). The SDK owns these wire/storage contracts;
+#: Core, ops-engine and the router keep their own runtime ownership and consume
+#: them through the SDK. The SDK never implements a second workflow runtime.
+EXECUTION_SCHEMA_SUBDIR = "execution"
+
+#: Directory holding the neutral adapter-facade contracts (SW-ADAPT-001). The
+#: SDK owns the descriptor, the credential reference and the search outcome as
+#: *neutral* contracts: they name no concrete provider and no package-format
+#: kind, so the common facade composes domain contracts rather than replacing
+#: them. The existing ``search-provider`` / ``model-provider`` lifecycle
+#: contracts are unchanged and remain valid alongside these.
+ADAPTER_SCHEMA_SUBDIR = "adapter"
+
+#: The frozen execution contract set. ``contract-catalog-v1`` is the SDK-owned
+#: index of the set and does not index itself; ``contract-catalog-record-v1`` is
+#: the ops-engine/router-owned surface published through a separate contract so
+#: each surface has exactly one named owner.
+EXECUTION_SCHEMA_FILENAMES = (
+    "run-snapshot-v1.schema.json",
+    "attempt-event-v1.schema.json",
+    "evidence-receipt-v1.schema.json",
+    "execution-envelope-v1.schema.json",
+    "reservation-v1.schema.json",
+    "route-decision-v1.schema.json",
+    "capability-snapshot-v1.schema.json",
+    "agent-message-v1.schema.json",
+    "mirror-target-v1.schema.json",
+    "contract-catalog-v1.schema.json",
+    "contract-catalog-record-v1.schema.json",
+)
+
+#: The neutral adapter-facade contract set (SW-ADAPT-001). These are the shared
+#: contracts the common facade and every package-format reader produce and
+#: consume: one neutral adapter descriptor, one credential reference, one typed
+#: search outcome. They live in a subdirectory so the flat core/lifecycle schema
+#: set (and its consumers) is untouched.
+ADAPTER_SCHEMA_FILENAMES = (
+    "adapter-descriptor-v1.schema.json",
+    "credential-reference-v1.schema.json",
+    "search-outcome-v1.schema.json",
+)
+
 # Canonical digest is computed over the sorted-key canonical JSON of every
-# schema, concatenated in sorted-filename order. It changes iff the
-# byte set changes.
-EXPECTED_SCHEMA_DIGEST = "f2ec1b0218dd380341cffb8bce80fc8d272d07ba244287f8af1ec6feb0db18d6"
+# schema, concatenated in sorted-identity order. It changes iff the
+# byte set changes. Covers the flat core/lifecycle schemas, the nested
+# execution contract set, and the nested adapter-facade contract set.
+EXPECTED_SCHEMA_DIGEST = "3dd247f604017bac4ff37ff4f3e9b46c5d1bc48fc8ef225de88ec4b6d14d2e64"
 
 
 class SchemaDigestError(Exception):
@@ -93,7 +138,11 @@ def read_schema(schemas_dir: Path, filename: str) -> dict:
 
 
 def load_registry(schemas_dir: Path | None = None) -> dict[str, dict]:
-    """Map every SDK schema's ``$id`` to its parsed schema object."""
+    """Map every SDK schema's ``$id`` to its parsed schema object.
+
+    Loads both the flat core/lifecycle schemas and the nested ``execution/``
+    contract set so that cross-schema references between them resolve.
+    """
     schemas_dir = schemas_dir or _default_schemas_dir()
     registry: dict[str, dict] = {}
     for filename in SCHEMA_FILENAMES:
@@ -102,16 +151,50 @@ def load_registry(schemas_dir: Path | None = None) -> dict[str, dict]:
         if not isinstance(schema_id, str):
             raise SchemaError(f"{filename}: missing string $id")
         registry[schema_id] = schema
+    for filename in EXECUTION_SCHEMA_FILENAMES:
+        schema = read_schema(schemas_dir / EXECUTION_SCHEMA_SUBDIR, filename)
+        schema_id = schema.get("$id")
+        if not isinstance(schema_id, str):
+            raise SchemaError(f"{filename}: missing string $id")
+        registry[schema_id] = schema
+    for filename in ADAPTER_SCHEMA_FILENAMES:
+        schema = read_schema(schemas_dir / ADAPTER_SCHEMA_SUBDIR, filename)
+        schema_id = schema.get("$id")
+        if not isinstance(schema_id, str):
+            raise SchemaError(f"{filename}: missing string $id")
+        registry[schema_id] = schema
     return registry
+
+
+def _contract_files(schemas_dir: Path) -> list[tuple[str, Path]]:
+    """Every contract file as a ``(stable identity key, path)`` pair."""
+    files: list[tuple[str, Path]] = [
+        (filename, schemas_dir / filename) for filename in SCHEMA_FILENAMES
+    ]
+    files.extend(
+        (
+            f"{EXECUTION_SCHEMA_SUBDIR}/{filename}",
+            schemas_dir / EXECUTION_SCHEMA_SUBDIR / filename,
+        )
+        for filename in EXECUTION_SCHEMA_FILENAMES
+    )
+    files.extend(
+        (
+            f"{ADAPTER_SCHEMA_SUBDIR}/{filename}",
+            schemas_dir / ADAPTER_SCHEMA_SUBDIR / filename,
+        )
+        for filename in ADAPTER_SCHEMA_FILENAMES
+    )
+    return files
 
 
 def canonical_digest(schemas_dir: Path | None = None) -> str:
     schemas_dir = schemas_dir or _default_schemas_dir()
     hasher = hashlib.sha256()
-    for filename in sorted(SCHEMA_FILENAMES):
-        hasher.update(filename.encode("utf-8"))
+    for key, path in sorted(_contract_files(schemas_dir)):
+        hasher.update(key.encode("utf-8"))
         hasher.update(b"\x00")
-        hasher.update(_canonical(read_schema(schemas_dir, filename)))
+        hasher.update(_canonical(read_schema(schemas_dir, key)))
         hasher.update(b"\x00")
     return hasher.hexdigest()
 
@@ -364,3 +447,340 @@ def validate(
 
 def validate_file(path: Path, schema_id: str) -> list[str]:
     return validate(json.loads(path.read_text(encoding="utf-8")), schema_id)
+
+
+# --- execution contract set: fail-closed version guard ---------------------
+
+
+class UnsupportedSchemaVersionError(Exception):
+    """Raised when an instance declares a schema_version the SDK cannot accept.
+
+    Unknown or absent versions fail closed: the SDK never best-effort parses a
+    future or unspecified wire contract.
+    """
+
+
+def supported_schema_versions(schemas_dir: Path | None = None) -> frozenset[str]:
+    """The ``schema_version`` consts accepted by the execution contract set."""
+    schemas_dir = schemas_dir or _default_schemas_dir()
+    versions: set[str] = set()
+    for filename in EXECUTION_SCHEMA_FILENAMES:
+        schema = read_schema(schemas_dir / EXECUTION_SCHEMA_SUBDIR, filename)
+        const = schema.get("properties", {}).get("schema_version", {}).get("const")
+        if isinstance(const, str):
+            versions.add(const)
+    return frozenset(versions)
+
+
+def require_supported_version(
+    instance: Any,
+    schemas_dir: Path | None = None,
+) -> str:
+    """Return the declared ``schema_version`` or fail closed.
+
+    Raises :class:`UnsupportedSchemaVersionError` when the instance is not an
+    object, has no ``schema_version``, or declares a version outside the set
+    the SDK freezes. Callers use this before :func:`validate` so that an
+    unknown version is refused explicitly rather than silently rejected or
+    silently accepted.
+    """
+    if not isinstance(instance, dict):
+        raise UnsupportedSchemaVersionError(
+            f"expected an object with schema_version, got {type(instance).__name__}"
+        )
+    declared = instance.get("schema_version")
+    if not isinstance(declared, str) or not declared:
+        raise UnsupportedSchemaVersionError("missing required string schema_version")
+    if declared not in supported_schema_versions(schemas_dir):
+        raise UnsupportedSchemaVersionError(f"unsupported schema_version: {declared}")
+    return declared
+
+
+# --- external authority boundary (trusted service seam) --------------------
+#
+# A JSON schema validates untrusted wire data. It CANNOT authenticate. The
+# functions below are the explicit boundary between the two: the instance is
+# untrusted input, and every trusted fact (authenticated principal, service
+# principal, issued handle ids, admitted authority decisions) must be supplied
+# by the trusted service seam that runs this code. Flags a caller places inside
+# the wire JSON (issuer="service", role="reviewer") are never consulted here.
+#
+# The runtime that owns the seam lives in Core / ops-engine. The SDK defines the
+# contract and the pure decision function; it does not become that runtime.
+
+
+class AuthorityBoundaryError(Exception):
+    """Raised when untrusted wire data does not match the authenticated context."""
+
+
+@dataclass(frozen=True)
+class AuthenticatedServiceContext:
+    """Trusted facts obtained from the authenticated service seam.
+
+    This object is constructed by the runtime *after* authentication (mTLS, a
+    signed service token, a native handle registry lookup). None of its fields
+    may be populated from the wire instance under verification, and the
+    constructor refuses container values so a parsed JSON object cannot be
+    forwarded wholesale as "trusted" context. This guard is a shape check, not
+    authentication: the SDK cannot prove a caller authenticated anything. The
+    runtime seam that owns authentication must supply this object and must not
+    derive any of its fields from the untrusted instance.
+    """
+
+    principal: str
+    roles: frozenset[str]
+    service_principal: str | None = None
+    issued_handle_ids: frozenset[str] = frozenset()
+    authority_decision_digests: frozenset[str] = frozenset()
+    worker_principal: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("principal", "service_principal", "worker_principal"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise AuthorityBoundaryError(
+                    f"trusted context field {name!r} must be a string, got "
+                    f"{type(value).__name__}; a parsed wire object must not be "
+                    f"used as authenticated context"
+                )
+        if not self.principal:
+            raise AuthorityBoundaryError("trusted context requires a principal")
+        for name in ("roles", "issued_handle_ids", "authority_decision_digests"):
+            value = getattr(self, name)
+            if not isinstance(value, frozenset) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise AuthorityBoundaryError(
+                    f"trusted context field {name!r} must be a frozenset of str"
+                )
+
+
+#: Roles that may author an independent reviewer/observer attestation.
+REVIEWER_ROLES = frozenset({"reviewer", "observer"})
+
+#: Roles that may issue a native run handle.
+RUN_SERVICE_ROLES = frozenset({"run-service", "native-run-service", "observer"})
+
+
+def verify_native_handle(handle: Any, context: AuthenticatedServiceContext) -> None:
+    """Assert *handle* was issued by the authenticated service.
+
+    Shape alone is not enough: the handle id must be in the service's issued
+    registry and the recorded service principal must equal the authenticated
+    one. A self-described ``{"handle_id": "x", "service_principal": "y"}`` from
+    the wire therefore fails closed.
+    """
+    if not isinstance(handle, dict):
+        raise AuthorityBoundaryError("native handle must be a service-issued object")
+    service_principal = handle.get("service_principal")
+    handle_id = handle.get("handle_id")
+    if not context.service_principal or service_principal != context.service_principal:
+        raise AuthorityBoundaryError(
+            "native handle service_principal is not the authenticated service"
+        )
+    if not isinstance(handle_id, str) or handle_id not in context.issued_handle_ids:
+        raise AuthorityBoundaryError("native handle was not issued by this service")
+
+
+def verify_run_snapshot_authority(
+    snapshot: Any, context: AuthenticatedServiceContext
+) -> None:
+    """Authority check for a run-snapshot-v1 wire record."""
+    if not isinstance(snapshot, dict):
+        raise AuthorityBoundaryError("run snapshot must be an object")
+    if not (context.roles & RUN_SERVICE_ROLES):
+        raise AuthorityBoundaryError("authenticated context lacks a run-service role")
+    verify_native_handle(snapshot.get("process_identity"), context)
+    _verify_decision(snapshot.get("authority_decision_digest"), context)
+
+
+def verify_evidence_receipt_authority(
+    receipt: Any, context: AuthenticatedServiceContext
+) -> None:
+    """Authority check for an evidence-receipt-v1 wire record.
+
+    The claimed reviewer principal must equal the authenticated principal, the
+    context must hold a reviewer/observer role, the authority decision must be
+    one the service admitted, and the reviewer must not be the worker whose work
+    is judged.
+    """
+    if not isinstance(receipt, dict):
+        raise AuthorityBoundaryError("evidence receipt must be an object")
+    claimed = receipt.get("principal")
+    if not isinstance(claimed, str) or claimed != context.principal:
+        raise AuthorityBoundaryError("receipt principal is not the authenticated reviewer")
+    if not (context.roles & REVIEWER_ROLES):
+        raise AuthorityBoundaryError("authenticated context lacks a reviewer role")
+    if context.worker_principal is not None and claimed == context.worker_principal:
+        raise AuthorityBoundaryError("a worker cannot attest its own attempt")
+    issuer = receipt.get("issuer")
+    if not isinstance(issuer, str) or not issuer:
+        raise AuthorityBoundaryError("receipt issuer is missing")
+    _verify_decision(receipt.get("authority_decision_digest"), context)
+
+
+def _verify_decision(digest: Any, context: AuthenticatedServiceContext) -> None:
+    if not isinstance(digest, str) or digest not in context.authority_decision_digests:
+        raise AuthorityBoundaryError(
+            "authority_decision_digest was not admitted by the trusted service"
+        )
+
+
+# --- explicit legacy adapters ---------------------------------------------
+#
+# Legacy consumers of the pre-SW-1510 flat shapes reach the frozen contracts
+# only through these explicit, tested adapters. There is no silent coercion:
+# an adapter that cannot represent a legacy value raises rather than guessing,
+# and it NEVER downgrades an authority-bearing legacy limit.
+
+LEGACY_ENVELOPE_FIELDS = (
+    "envelope_id",
+    "authorized_principal",
+    "subject_digest",
+    "brief_digest",
+    "scope",
+    "max_request_bytes",
+    "max_output_tokens",
+    "max_inflight_requests",
+    "max_parallel_lanes",
+    "allowed_routes",
+    "irreversible_actions",
+    "authority_evidence_digest",
+)
+
+#: Legacy keys that expressed a real completion-stopping ceiling or deadline.
+#: Migrating one of these to observe_adapt would silently widen authority, so
+#: the adapter preserves them as an explicit enforcing policy instead.
+LEGACY_ENFORCING_KEYS = (
+    "max_requests",
+    "max_reserved_tokens",
+    "deadline_utc",
+    "max_correction_rounds",
+)
+
+
+class LegacyMigrationError(AuthorityBoundaryError):
+    """Raised when a legacy envelope cannot be migrated without weakening it."""
+
+
+def adapt_legacy_execution_envelope(legacy: dict) -> dict:
+    """Map a pre-SW-1510 flat envelope onto the frozen execution-envelope-v1.
+
+    Two sound outcomes, chosen from the legacy content rather than from a
+    blanket policy change:
+
+    * A legacy envelope that carried a finite ceiling or a deadline is migrated
+      to an explicit ``enforcing`` policy, preserving those ceilings. It is
+      never downgraded to ``observe_adapt``.
+    * A legacy envelope with no cumulative ceiling and no deadline migrates to
+      ``observe_adapt``. Its per-request limits and active slots are preserved
+      and any legacy request/token figures are retained only as nonnegative
+      accounting counters. No invented maximum and no fabricated future date is
+      introduced.
+
+    Anything that cannot be represented soundly (an unknown schema version, a
+    missing required field, a non-positive per-request limit, or an enforcing
+    legacy envelope whose deadline is absent) raises with an actionable message.
+    """
+    if not isinstance(legacy, dict):
+        raise LegacyMigrationError("legacy envelope must be an object")
+    if "schema_version" in legacy:
+        require_supported_version(legacy)  # unknown versions fail closed
+
+    missing = [f for f in LEGACY_ENVELOPE_FIELDS if f not in legacy]
+    if missing:
+        raise LegacyMigrationError(f"legacy envelope missing fields: {missing}")
+
+    for per_request in ("max_request_bytes", "max_output_tokens",
+                        "max_inflight_requests", "max_parallel_lanes"):
+        value = legacy[per_request]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise LegacyMigrationError(
+                f"legacy {per_request} must be a positive integer, got {value!r}"
+            )
+
+    has_ceiling = any(k in legacy for k in LEGACY_ENFORCING_KEYS)
+    base = {
+        "schema_version": "1.0.0",
+        "envelope_id": legacy["envelope_id"],
+        "authorized_principal": legacy["authorized_principal"],
+        "subject_digest": legacy["subject_digest"],
+        "brief_digest": legacy["brief_digest"],
+        "scope": legacy["scope"],
+        "allowed_routes": legacy["allowed_routes"],
+        "irreversible_actions": legacy["irreversible_actions"],
+        "authority_evidence_digest": legacy["authority_evidence_digest"],
+    }
+
+    if not has_ceiling:
+        deadline = legacy.get("deadline_utc", None)
+        counters = None
+        if all(k in legacy for k in ("max_requests", "max_reserved_tokens")):
+            counters = {
+                "max_requests": _nonnegative_int(legacy["max_requests"], "max_requests"),
+                "max_reserved_tokens": _nonnegative_int(
+                    legacy["max_reserved_tokens"], "max_reserved_tokens"
+                ),
+            }
+        policy = {
+            "policy": "observe_adapt",
+            "max_request_bytes": legacy["max_request_bytes"],
+            "max_output_tokens": legacy["max_output_tokens"],
+            "max_inflight_requests": legacy["max_inflight_requests"],
+            "max_parallel_lanes": legacy["max_parallel_lanes"],
+        }
+        if counters is not None:
+            policy["counters"] = counters
+        base["deadline_utc"] = deadline
+        base["limit_policy"] = policy
+        return base
+
+    # Explicit enforcing intent: preserve, do not weaken.
+    if "max_requests" not in legacy or "max_reserved_tokens" not in legacy:
+        raise LegacyMigrationError(
+            "legacy envelope has enforcing intent but a cumulative ceiling is "
+            "absent; supply an explicit enforcing envelope"
+        )
+    deadline_utc = legacy.get("deadline_utc")
+    if not isinstance(deadline_utc, str) or not deadline_utc:
+        raise LegacyMigrationError(
+            "legacy envelope has enforcing intent but no deadline_utc; a "
+            "fabricated date is not accepted — supply a real deadline"
+        )
+    max_requests = _positive_int(legacy["max_requests"], "max_requests")
+    max_reserved = _positive_int(legacy["max_reserved_tokens"], "max_reserved_tokens")
+    correction_rounds = legacy.get("max_correction_rounds", 0)
+    if not isinstance(correction_rounds, int) or isinstance(correction_rounds, bool) or correction_rounds < 0:
+        raise LegacyMigrationError(
+            f"legacy max_correction_rounds must be a nonnegative integer, got {correction_rounds!r}"
+        )
+    base["deadline_utc"] = deadline_utc
+    base["limit_policy"] = {
+        "policy": "enforcing",
+        "max_request_bytes": legacy["max_request_bytes"],
+        "max_output_tokens": legacy["max_output_tokens"],
+        "max_inflight_requests": legacy["max_inflight_requests"],
+        "max_parallel_lanes": legacy["max_parallel_lanes"],
+        "counters": {"max_requests": max_requests, "max_reserved_tokens": max_reserved},
+        "enforcement": {
+            "max_requests": max_requests,
+            "max_reserved_tokens": max_reserved,
+            "max_correction_rounds": correction_rounds,
+            "deadline": True,
+        },
+    }
+    return base
+
+
+def _positive_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise LegacyMigrationError(f"legacy {name} must be a positive integer, got {value!r}")
+    return value
+
+
+def _nonnegative_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise LegacyMigrationError(
+            f"legacy {name} must be a nonnegative integer, got {value!r}"
+        )
+    return value

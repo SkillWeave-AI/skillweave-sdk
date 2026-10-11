@@ -1,0 +1,12 @@
+# Layer-3 repository override: the mirror destinations for this repository.
+# The mirror workflow reads this file; no forge repository is restated as a
+# literal in .forgejo/. The forge is a value, not a key name.
+destinations:
+  - forge: forgejo
+    repo: skillweave/skillweave-sdk
+    role: release
+    visibility: public
+  - forge: github
+    repo: SkillWeave-AI/skillweave-sdk
+    role: release
+    visibility: public

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/execution-envelope/v1",
+  "title": "Execution Envelope v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Service-authorized execution budget for one run, carrying one of two explicit policies. 'observe_adapt' records atomic counters and applies only per-request limits and active-slot caps; it has no cumulative USD/token/request ceiling and no whole-job deadline (deadline_utc is a scheduling target, or null, and never aborts productive work). 'enforcing' is an explicit opt-in whose cumulative ceilings and deadline flag are stated in the envelope and abort when reached. Unknown usage is recorded as unknown and remains reserved; it is never counted as zero. authorized_principal and authority_evidence_digest come from the owner authority, not a worker claim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "envelope_id", "authorized_principal", "subject_digest",
+    "brief_digest", "scope", "deadline_utc", "limit_policy", "allowed_routes",
+    "irreversible_actions", "authority_evidence_digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "envelope_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "authorized_principal": {
+      "type": "string", "minLength": 1,
+      "description": "Owner principal that granted the envelope. Authenticated at the service seam, not self-declared by the worker."
+    },
+    "subject_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "brief_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "scope": { "type": "object" },
+    "deadline_utc": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Scheduling target, or null when there is none. It is a hard abort deadline ONLY when limit_policy.policy is 'enforcing' and limit_policy.enforcement.deadline is true. Under 'observe_adapt' it never aborts productive work, and null is an honest 'no deadline' value, never a fabricated future date."
+    },
+    "limit_policy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "max_request_bytes", "max_output_tokens", "max_inflight_requests", "max_parallel_lanes"],
+          "properties": {
+            "policy": { "const": "observe_adapt" },
+            "max_request_bytes": { "type": "integer", "minimum": 1, "description": "Per-request pre-flight exposure reservation in raw request bytes." },
+            "max_output_tokens": { "type": "integer", "minimum": 1, "description": "Per-request output-token cap." },
+            "max_inflight_requests": { "type": "integer", "minimum": 1, "description": "Active-slot cap for live HTTP capacity." },
+            "max_parallel_lanes": { "type": "integer", "minimum": 1 },
+            "counters": {
+              "type": "object", "additionalProperties": false,
+              "description": "Optional atomic accounting counters. These are measurements, not completion-stopping ceilings; when omitted there is simply no accounting ceiling. No invented positive maximum is required.",
+              "required": ["max_requests", "max_reserved_tokens"],
+              "properties": {
+                "max_requests": { "type": "integer", "minimum": 0, "description": "Nonnegative atomic request counter. Measurement only under observe_adapt." },
+                "max_reserved_tokens": { "type": "integer", "minimum": 0, "description": "Nonnegative atomic token-reservation counter. Measurement only under observe_adapt." }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "max_request_bytes", "max_output_tokens", "max_inflight_requests", "max_parallel_lanes", "counters", "enforcement"],
+          "properties": {
+            "policy": { "const": "enforcing" },
+            "max_request_bytes": { "type": "integer", "minimum": 1 },
+            "max_output_tokens": { "type": "integer", "minimum": 1 },
+            "max_inflight_requests": { "type": "integer", "minimum": 1 },
+            "max_parallel_lanes": { "type": "integer", "minimum": 1 },
+            "counters": {
+              "type": "object", "additionalProperties": false,
+              "required": ["max_requests", "max_reserved_tokens"],
+              "properties": {
+                "max_requests": { "type": "integer", "minimum": 1 },
+                "max_reserved_tokens": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "enforcement": {
+              "type": "object", "additionalProperties": false,
+              "required": ["max_requests", "max_reserved_tokens", "max_correction_rounds", "deadline"],
+              "properties": {
+                "max_requests": { "type": "integer", "minimum": 1, "description": "Explicit cumulative request ceiling that aborts when reached." },
+                "max_reserved_tokens": { "type": "integer", "minimum": 1, "description": "Explicit cumulative token ceiling that aborts when reached." },
+                "max_correction_rounds": { "type": "integer", "minimum": 0, "description": "Zero correction rounds is a valid finite choice; unbounded retry has no representation here." },
+                "deadline": { "type": "boolean", "description": "When true, deadline_utc must be a real timestamp and aborts when reached." }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "allowed_routes": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Exhaustively admitted routes. No implicit client fallback outside this list."
+    },
+    "irreversible_actions": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "authority_evidence_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

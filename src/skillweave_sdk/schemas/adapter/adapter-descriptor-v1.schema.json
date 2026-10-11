@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/adapter/adapter-descriptor/v1",
+  "title": "Neutral Adapter Descriptor",
+  "description": "A versioned, package-format-independent descriptor of one adapter at the common facade. It states the runtime category, the operations it serves, the invocation transport and the capabilities it requires -- never a package-format kind taxonomy, a service requirement or a distribution/provisioning decision. Runtime category, invocation transport, package format/kind and distribution are independent axes. Domain payloads keep their own schemas; this descriptor composes them, it does not replace them, and it creates no WorkContract and no gate acceptance authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "categories",
+    "operations",
+    "transport",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Version of this descriptor contract, not of the adapter.",
+      "const": "1.0.0"
+    },
+    "id": {
+      "description": "Consumer-unique adapter id. Opaque; never matched against a vendor list.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "categories": {
+      "description": "Runtime categories this adapter registers under. A category is a runtime role, not a package kind. The v1 set is closed: an unknown category fails closed rather than being coerced onto a nearest match.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "search",
+          "generic"
+        ]
+      }
+    },
+    "operations": {
+      "description": "Operations served, each bound to its own domain contracts. The facade resolves by category+operation+capability; it never invents an operation.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "input_contract",
+          "result_contract"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input_contract": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result_contract": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required_capabilities": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "transport": {
+      "description": "Invocation transport binding (e.g. http, mcp-stdio, in-process). Independent of package format and of runtime category.",
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "credential_refs": {
+      "description": "References to credentials by id. A descriptor NEVER carries a credential value; availability is resolved and gated at call time.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "package_ref": {
+      "description": "Neutral provenance for a descriptor produced by a package-format reader. Opaque format/version/artifact references only; no reader-specific kind enum is interpreted by the common facade. There is no 'credential_value' field anywhere in the descriptor: a persisted credential is an additional property and fails closed.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "format",
+            "format_version",
+            "name",
+            "version",
+            "digest"
+          ],
+          "properties": {
+            "format": {
+              "type": "string",
+              "minLength": 1
+            },
+            "format_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "kind": {
+              "description": "Opaque package-format kind. Deliberately an open string, never an enum: the common facade must not branch on a format-specific vocabulary.",
+              "type": "string",
+              "minLength": 1
+            },
+            "schema_ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "container": {
+              "type": "boolean"
+            },
+            "member_ref": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "description": "A container-root package_ref must name the admitted member it binds; a container with no member is refused before load.",
+      "if": {
+        "properties": {
+          "package_ref": {
+            "type": "object",
+            "properties": {
+              "container": {
+                "const": true
+              }
+            },
+            "required": [
+              "container"
+            ]
+          }
+        },
+        "required": [
+          "package_ref"
+        ]
+      },
+      "then": {
+        "properties": {
+          "package_ref": {
+            "required": [
+              "member_ref"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/evidence-receipt/v1",
+  "title": "Evidence Receipt v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). Independently observed acceptance fact for one criterion of one attempt, issued by an independent observer and consumed by the gate service. signature establishes provenance only, not artifact truth: semantic_checks records the artifact-specific checks actually run. A model-authored string is never accepted as reviewer attestation; the authenticated reviewer principal comes from the external authority, not from this wire record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "task_id", "attempt", "criterion_id",
+    "subject_digest", "artifact_digest", "verifier_version", "verdict",
+    "issuer", "principal", "authority_decision_digest", "signature", "semantic_checks"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "run_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "task_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "criterion_id": { "type": "string", "minLength": 1, "description": "Required acceptance-criterion identifier. Missing criterion ids fail closed." },
+    "subject_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "artifact_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Digest of the artifact judged; checked by the gate, not trusted from the receipt." },
+    "verifier_version": { "type": "string", "minLength": 1 },
+    "verdict": { "enum": ["pass", "fail", "hold", "not_applicable"] },
+    "issuer": { "type": "string", "minLength": 1 },
+    "principal": { "type": "string", "minLength": 1, "description": "Authenticated reviewer/observer principal, separate from the worker principal." },
+    "authority_decision_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "signature": { "type": "string", "minLength": 1, "description": "Signature over the receipt. Establishes provenance, not artifact truth." },
+    "semantic_checks": {
+      "type": "array", "minItems": 1,
+      "description": "Artifact-specific checks actually executed. A receipt without at least one check is not acceptance evidence.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["check_id", "result", "evidence_digest"],
+        "properties": {
+          "check_id": { "type": "string", "minLength": 1 },
+          "result": { "enum": ["pass", "fail", "hold", "not_applicable"] },
+          "evidence_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skillweave.dev/schemas/execution/attempt-event/v1",
+  "title": "Attempt Event v1",
+  "description": "Frozen execution contract (SW-1510-CONTRACT). One append-only journal event for a run/task/attempt, measured by the process/gateway collector. event_id is a host correlation key, treated as a collected fact, not a worker assertion. issuer and principal must name an authenticated authority; the schema can express but cannot enforce that, so consumers treat unauthenticated issuers as untrusted input.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "task_id", "attempt", "event_id", "sequence",
+    "event_type", "measured_at", "issuer", "principal", "evidence_digest", "payload"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "run_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "task_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "event_id": {
+      "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "description": "Host-observed correlation key (for example a gateway request id). Not a model-authored claim."
+    },
+    "sequence": {
+      "type": "integer", "minimum": 1,
+      "description": "Monotonic per-run event sequence. Gaps or duplicates are contention, not silently renumbered events."
+    },
+    "event_type": { "type": "string", "minLength": 1 },
+    "measured_at": { "type": "string", "minLength": 1, "format": "date-time" },
+    "issuer": { "type": "string", "minLength": 1, "description": "Authenticated issuer. Passing the schema is not authentication." },
+    "principal": { "type": "string", "minLength": 1 },
+    "evidence_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "payload": { "type": "object" }
+  }
+}
