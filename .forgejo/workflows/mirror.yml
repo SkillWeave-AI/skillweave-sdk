@@ -1,37 +1,31 @@
-# ops-engine v3.4.2 mirror workflow (install-free engine, contract-driven).
-#
-# Forgejo is canonical; GitHub (SkillWeave-AI/skillweave-sdk) is the public
-# read-only mirror. Force-push exactly the ref that triggered the run.
-#
-# Install-free: this workflow provisions NO engine -- no wheel is fetched, no
-# artifact digest is verified, no version is read from an Actions variable. The
-# cited ops-engine v3.4.2 that ships this workflow is the runner's environment,
-# not something the job installs. The only operator-provided material the job
-# needs is the secret GH_MIRROR_TOKEN.
-#
-# The destinations live in .ops.yaml, not in this file: the scan step below
-# reads the manifest and selects the forge the run mirrors TO, so the GitHub
-# owner/name is never restated as a literal in an env or in the push command.
-#
-# exact-ref Muster (LVC-MIR-G0, 2026-07-28), identisch zum Core-Repo.
-# Important for the initial fill: an empty repository can only be populated
-# through a real ref. The first push to main has to create a main on GitHub, and
-# the exact-ref pattern does that because it mirrors the triggering ref back.
-
 name: Mirror to GitHub
 
+# Forgejo (git.langevc.com) is canonical. GitHub (SkillWeave-AI/skillweave-sdk) is a read-only mirror.
+# Force-push ONLY the ref that triggered this run (branch or tag). No --prune and no
+# 'refs/heads/*' wildcard: the CI checkout only has this one ref locally, so a pruning
+# wildcard push would try to delete every OTHER branch on the mirror -- including
+# GitHub's default branch (which GitHub refuses, failing the job) and any
+# GitHub-managed branch such as gh-pages. Pushing only ${GITHUB_REF} keeps the mirror
+# in sync and leaves those untouched. Unified pattern (see lvc-ops/docs/release-flow.md).
+#
+# REL-010 -- this workflow mirrors git refs ONLY. It used to also derive the GitHub
+# release object from the canonical Forgejo release by downloading the four release
+# assets over the network and re-uploading them (REL-004), waiting under a hard bound
+# for the canonical release to appear (REL-009). That release logic is gone: the build
+# in forgejo-release.yml now publishes its four assets to BOTH forges from its own
+# workspace, so there is nothing to wait for and nothing to re-download here. This file
+# keeps exactly the force-push below, unchanged in intent.
+#
+# ADP-009 -- the repository this workflow pushes to is a destination, so it must come
+# from the committed config layer, never from this file as a literal. The GitHub
+# destination is read out of `.ops.yaml` below (stdlib only, REL-006: this job carries
+# neither yaml nor pydantic and installs nothing). The credential stays where it
+# belongs: GH_MIRROR_TOKEN is a secret (a credential, not a destination) and is never
+# copied into `.ops.yaml`, which carries the repository only.
 on:
   push:
     branches: ["**"]
     tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Ref zum Nachspiegeln (z.B. refs/tags/v1.0.0)'
-        required: true
-
-permissions:
-  contents: read
 
 jobs:
   mirror:
@@ -40,67 +34,128 @@ jobs:
       - uses: https://github.com/actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Resolve mirror destination from .ops.yaml
-        run: |
-          set -euo pipefail
-          # DESTINATION_SCAN
-          destination="$(python3 - <<'DEST_PY'
-          import sys, yaml
-          # Read the committed ops manifest and select the mirror destination:
-          # the forge that is not the canonical Forgejo source. The manifest,
-          # not this workflow, is the source of truth for the destination -- the
-          # GitHub owner/name is never a literal in an env or in the push command.
-          with open(".ops.yaml", encoding="utf-8") as handle:
-              manifest = yaml.safe_load(handle)
-          destinations = manifest["destinations"]
-          sources = [d for d in destinations if d["forge"] == "forgejo"]
-          mirrors = [d for d in destinations if d["forge"] != "forgejo"]
-          if len(sources) != 1 or len(mirrors) != 1:
-              print(
-                  "::error::expected one forgejo source and one mirror "
-                  f"destination, got {len(sources)} and {len(mirrors)}",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          print(f"{mirrors[0]['owner']}/{mirrors[0]['name']}")
-          DEST_PY
-          )"
-          [ -n "${destination}" ] || { echo "error: destination scan returned empty" >&2; exit 1; }
-          echo "mirror destination: ${destination}"
-          echo "GH_REPO=${destination}" >> "${GITHUB_ENV:?GITHUB_ENV unset}"
-
-      - name: Preflight — prove destination before any push
-        env:
-          GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
-          GH_EXPECTED_VISIBILITY: "public"
-        run: |
-          set -euo pipefail
-          python3 - "${GH_REPO:?GH_REPO unset}" "${GH_MIRROR_TOKEN:-}" "${GH_EXPECTED_VISIBILITY:-}" <<'PROVE_PY'
-          import asyncio, sys
-          from ops_engine.modules.mirror import MirrorHandler, MirrorDestinationError
-
-          async def main():
-              destination = sys.argv[1]
-              token = sys.argv[2] if sys.argv[2] else None
-              visibility = sys.argv[3] if sys.argv[3] else None
-              try:
-                  await MirrorHandler.prove_destination(
-                      destination, token=token,
-                      expected_visibility=visibility,
-                  )
-              except MirrorDestinationError as exc:
-                  print(f"::error::preflight: {exc}", file=sys.stderr)
-                  sys.exit(1)
-          asyncio.run(main())
-          PROVE_PY
-          echo "preflight: ${GH_REPO} verified."
-
       - name: Push to GitHub mirror
         env:
           GH_MIRROR_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
-          MIRROR_REF: ${{ inputs.ref || github.ref }}
         run: |
           set -euo pipefail
-          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/${GH_REPO:?GH_REPO unset}.git"
-          git push --force "$remote" "+${MIRROR_REF}:${MIRROR_REF}"
+          mirror_repo="$(
+            python3 - <<'PY'
+          import sys
+
+          def _clean_scalar(raw):
+              """Strip YAML quoting/inline-comment then flag anything leftover.
+
+              The real loader (config_loader.load_ops_yaml) accepts forms this
+              line-scan cannot parse: a single- or double-quoted scalar, and an
+              inline comment after a value. Rather than pass the raw bytes
+              (quotes, trailing comment) into a push remote that git then
+              rejects with an obscure error, this mirror strips the exact YAML
+              wrapping it understands and, when wrapping it does NOT understand
+              remains, refuses by name instead of guessing.
+              """
+              v = raw.strip()
+              if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                  v = v[1:-1].strip()
+              marker = None
+              if v and v[0] in "\"'":
+                  marker = "an unmatched quote"
+              elif "#" in v:
+                  rest = v.split("#", 1)[1]
+                  if rest.strip():
+                      marker = "an inline comment"
+              if marker:
+                  return "", marker
+              return v, None
+
+          # Strict, refusal-first scan of `.ops.yaml` for the github destination.
+          #
+          # This workflow is install-free (REL-010 keeps the mirror a bare force-push,
+          # and REL-006 keeps the bare runner free of yaml/pydantic), so it cannot call
+          # config_loader.load_ops_yaml here. It reads ONLY the rigid `destinations`
+          # list that the committed `.ops.yaml` declares, and REFUSES (never guesses)
+          # the moment the file uses a form this scan does not understand. The forms
+          # it understands and strips are YAML scalar quoting and an inline comment;
+          # any wrapping left over after that is refused by name rather than passed
+          # as raw bytes into a push remote (see _clean_scalar) or guessed at.
+          indent = None
+          git_repos = []
+          with open(".ops.yaml", "r", encoding="utf-8") as fh:
+              in_destinations = False
+              cur = {}
+              cur_indent = None
+              for lineno, raw in enumerate(fh, start=1):
+                  line = raw.rstrip("\n")
+                  stripped = line.strip()
+                  if not stripped or stripped.startswith("#"):
+                      continue
+                  pad = len(line) - len(line.lstrip(" "))
+                  if in_destinations and stripped == "destinations:":
+                      raise LookupError("nested destinations is not supported")
+                  if not in_destinations and stripped == "destinations:":
+                      in_destinations = True
+                      indent = pad
+                      continue
+                  if not in_destinations:
+                      continue
+                  if pad <= indent:
+                      break
+                  if stripped.startswith("- "):
+                      if cur and cur.get("forge") == "github":
+                          git_repos.append(cur["repo"])
+                      cur = {}
+                      cur_indent = pad
+                      field = stripped[2:]
+                      if ":" not in field:
+                          raise LookupError("unexpected destinations sequence entry")
+                      key, _, value = field.partition(":")
+                      if key not in ("forge", "repo", "role", "visibility"):
+                          raise LookupError("unknown destination field: %r" % key)
+                      value, marker = _clean_scalar(value)
+                      if marker:
+                          sys.stderr.write(
+                              "MirrorDestinationBoundaryError: .ops.yaml destination value "
+                              "at line %d carries %s; this mirror does not parse YAML and "
+                              "cannot be sure which repo it pushes to. Refusing to "
+                              "guess a push remote over one a reviewer did not see.\n"
+                              % (lineno, marker)
+                          )
+                          sys.exit(2)
+                      cur[key] = value
+                  else:
+                      if cur_indent is None or pad <= cur_indent:
+                          raise LookupError(
+                              "unexpected destinations indentation at line %d" % lineno
+                          )
+                      key, _, value = stripped.partition(":")
+                      if ":" not in stripped or not value.strip():
+                          raise LookupError(
+                              "destination value must be `key: value` at line %d" % lineno
+                          )
+                      if key not in ("forge", "repo", "role", "visibility"):
+                          raise LookupError("unknown destination field: %r" % key)
+                      value, marker = _clean_scalar(value)
+                      if marker:
+                          sys.stderr.write(
+                              "MirrorDestinationBoundaryError: .ops.yaml destination value "
+                              "at line %d carries %s; this mirror does not parse YAML and "
+                              "cannot be sure which repo it pushes to. Refusing to "
+                              "guess a push remote over one a reviewer did not see.\n"
+                              % (lineno, marker)
+                          )
+                          sys.exit(2)
+                      cur[key] = value
+              if in_destinations and cur and cur.get("forge") == "github":
+                  git_repos.append(cur["repo"])
+          if len(git_repos) != 1:
+              sys.stderr.write(
+                  "MirrorDestinationBoundaryError: .ops.yaml must declare exactly one "
+                  "github destination (the mirror); refusing to push an ambiguous or "
+                  "unconfigured mirror remote rather than silently choosing one.\n"
+              )
+              sys.exit(2)
+          sys.stdout.write(git_repos[0] + "\n")
+          PY
+          )"
+          remote="https://x-access-token:${GH_MIRROR_TOKEN}@github.com/${mirror_repo}.git"
+          git push --force "$remote" "+${GITHUB_REF}:${GITHUB_REF}"
