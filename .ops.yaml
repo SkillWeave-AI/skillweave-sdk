@@ -1,24 +1,12 @@
-# Repository operations manifest for skillweave-sdk (ops-engine v3.4.2 format).
-#
-# Forgejo is canonical; GitHub is the public read-only release mirror. Both
-# destinations publish the same package under role: release. This file is the
-# single source of truth for the mirror workflow's destination scan
-# (.forgejo/workflows/mirror.yml): the workflow restates no destination and
-# reads the GitHub one from here.
-
-version: 1
-repository: skillweave-sdk
-
+# Layer-3 repository override: the mirror destinations for this repository.
+# The mirror workflow reads this file; no forge repository is restated as a
+# literal in .forgejo/. The forge is a value, not a key name.
 destinations:
   - forge: forgejo
-    url: https://git.langevc.com
-    owner: skillweave
-    name: skillweave-sdk
+    repo: skillweave/skillweave-sdk
     role: release
     visibility: public
   - forge: github
-    url: https://github.com
-    owner: SkillWeave-AI
-    name: skillweave-sdk
+    repo: SkillWeave-AI/skillweave-sdk
     role: release
     visibility: public
