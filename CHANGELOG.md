@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.3.1
+
+### Features
+
+- Attach the SDK release assets to every release. Each release now carries the
+  built wheel, the source distribution (sdist) and a `SHA256SUMS` file with one
+  SHA-256 checksum per distribution file, attached to the release on every
+  destination.
+
+### Fixes
+
+- Build the release assets deterministically. The wheel and the sdist are built
+  from the tagged commit with a fixed build timestamp, so two builds of the same
+  commit are byte-identical and every download can be verified against its
+  published checksum.
+
+### Documentation
+
+- Document the install from the release assets. Download the wheel, the sdist
+  and `SHA256SUMS` from the release page, verify all three with
+  `sha256sum -c SHA256SUMS`, then install the wheel with pip. Installing from
+  the git tag stays available as a fallback.
+
 ## v0.3.0
 
 ### Features

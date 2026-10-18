@@ -17,6 +17,36 @@ Forgejo is canonical; GitHub is the read-only mirror.
 | `schema_version.toml` | Root of the release graph; consumers pin a version from here |
 | `src/skillweave_sdk/` | The distribution. Carries the version and nothing else yet |
 
+## Install
+
+### From the release assets (primary)
+
+Every SDK release carries the built wheel, the sdist and a `SHA256SUMS` file
+with one SHA-256 checksum per distribution file. Download all three assets —
+the wheel, the sdist and `SHA256SUMS` — into one directory, verify the
+downloads, then install the wheel:
+
+```sh
+sha256sum -c SHA256SUMS
+pip install skillweave_sdk-0.3.1-*.whl
+```
+
+`SHA256SUMS` lists the wheel and the sdist, so all three files must sit in the
+same directory and `sha256sum -c SHA256SUMS` must report `OK` for both before
+you install. The assets are built deterministically from the tagged commit, so
+the checksum of a given release is stable and can be republished. The sdist is
+published alongside the wheel for source installs.
+
+### From the git tag (fallback)
+
+If you cannot fetch the release assets, install from the annotated tag:
+
+```sh
+pip install "git+https://git.langevc.com/skillweave/skillweave-sdk@v0.3.1"
+```
+
+This path does not verify a published checksum; prefer the release assets.
+
 ## Where the line runs
 
 This SDK owns the **contract** — the authoritative **value set** of schema and
