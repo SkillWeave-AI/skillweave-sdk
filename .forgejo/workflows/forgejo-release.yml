@@ -13,9 +13,11 @@ name: Create Forgejo Release
 #   implicit CI input -> the pinned engine ref and the two secrets are the only
 #                       CI inputs; no repository variable is read anywhere
 #
-# No assets are attached. This repository is consumed from published source by
-# tag; it builds no distribution artifact here, so release-assets stays empty and
-# the engine attaches nothing rather than failing on a missing path.
+# The release carries assets. The wheel, the sdist and SHA256SUMS are built in
+# this workflow by scripts/build_release_assets.py from the tag being released,
+# and that directory is the one the engine attaches to the release object on
+# every destination. The build is deterministic, so the checksums a consumer
+# verifies describe a rebuild of the same commit as well as the attached file.
 
 on:
   push:
@@ -256,6 +258,62 @@ jobs:
             --ticket-prefixes "$PREFIXES_FILE" \
             "$NOTES_FILE"
 
+      # The wheel, the sdist and SHA256SUMS are built here, from the tag the
+      # release is for, and never carried over from an earlier run: the assets
+      # the release attaches are the ones this commit and this tag produce.
+      # One commit and one SOURCE_DATE_EPOCH give byte-identical files, so a
+      # consumer verifying a published checksum verifies a rebuild too.
+      #
+      # The build script installs nothing. It runs the build backend in its own
+      # temporary virtual environment and needs that backend importable by the
+      # interpreter running it, so the backend goes into a venv outside the
+      # source tree: nothing lands in the checkout, and the runner's PEP 668
+      # externally-managed interpreter is never written to.
+      - name: Build the release assets
+        env:
+          TAG_NAME: "${{ github.event.inputs.tag_name || github.ref_name }}"
+        run: |
+          set -euo pipefail
+
+          BUILD_VENV="$(mktemp -d)/build-venv"
+          python3 -m venv "$BUILD_VENV"
+          "$BUILD_VENV/bin/python" -m pip install --quiet \
+            "build" "setuptools>=77.0.0"
+
+          "$BUILD_VENV/bin/python" scripts/build_release_assets.py \
+            --source . \
+            --output-dir release-assets \
+            --tag "$TAG_NAME"
+
+          # Prove what was built. The engine attaches a directory, so a missing
+          # or half-written one publishes a release with no assets and reports
+          # success; the three files are checked here, where the cause is still
+          # visible, rather than surfacing as a release that carries nothing.
+          python3 - <<'ASSET_CHECK_PY'
+          import sys
+          from pathlib import Path
+
+          directory = Path("release-assets")
+          names = sorted(p.name for p in directory.iterdir()) \
+              if directory.is_dir() else []
+          missing = []
+          if not any(name.endswith(".whl") for name in names):
+              missing.append("wheel")
+          if not any(name.endswith(".tar.gz") for name in names):
+              missing.append("sdist")
+          if "SHA256SUMS" not in names:
+              missing.append("SHA256SUMS")
+          if missing:
+              sys.stderr.write(
+                  "MissingReleaseAssetsError: release-assets carries no %s "
+                  "(found: %s). Refusing to publish a release whose assets are "
+                  "absent, rather than attaching nothing.\n"
+                  % (", ".join(missing), ", ".join(names) or "(empty)")
+              )
+              sys.exit(2)
+          sys.stdout.write("release assets: %s\n" % ", ".join(names))
+          ASSET_CHECK_PY
+
       # The workflow calls the engine to publish; it does not reimplement
       # publication. ReleaseHandler.publish_release creates the release on EVERY
       # destination resolved from the committed .ops.yaml and reports a partial
@@ -266,8 +324,10 @@ jobs:
       # is a named refusal, never a silent unauthenticated publication. The
       # webhook secret is empty on both: publication never parses a webhook.
       #
-      # No assets are attached: release-assets is created and left empty so the
-      # engine attaches nothing, rather than failing on a missing path.
+      # The assets come from the build step above, which has already refused a
+      # run without them. release-assets is deliberately not created here: an
+      # empty directory would let this step attach nothing and still report
+      # success, which is the failure the build step exists to prevent.
       - name: Publish the release to every destination
         env:
           TAG_NAME: "${{ github.event.inputs.tag_name || github.ref_name }}"
@@ -279,8 +339,6 @@ jobs:
           GH_MIRROR_TOKEN: "${{ secrets.GH_MIRROR_TOKEN }}"
         run: |
           set -euo pipefail
-
-          mkdir -p release-assets
 
           # The engine installs into an isolated venv outside the source tree:
           # the runner's system interpreter is PEP 668 externally managed, and an
