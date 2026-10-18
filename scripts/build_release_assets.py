@@ -179,7 +179,7 @@ def _resolve_epoch(source: Path, tag: str | None, explicit: int | None) -> int:
     if explicit is not None:
         if explicit < 0:
             raise SourceDateEpochError(
-                "SOURCE_DATE_EPOCH %d is negative; refusing a epoch that no "
+                "SOURCE_DATE_EPOCH %d is negative; refusing an epoch that no "
                 "archive format can carry." % explicit
             )
         return explicit
@@ -194,7 +194,7 @@ def _resolve_epoch(source: Path, tag: str | None, explicit: int | None) -> int:
             ) from None
         if epoch < 0:
             raise SourceDateEpochError(
-                "SOURCE_DATE_EPOCH %d is negative; refusing a epoch that no "
+                "SOURCE_DATE_EPOCH %d is negative; refusing an epoch that no "
                 "archive format can carry." % epoch
             )
         return epoch
@@ -219,7 +219,7 @@ def _resolve_epoch(source: Path, tag: str | None, explicit: int | None) -> int:
         return int(out.stdout.strip())
     except ValueError:
         raise SourceDateEpochError(
-            "git reported %r as the commit time of %s; refusing a epoch that "
+            "git reported %r as the commit time of %s; refusing an epoch that "
             "is not an integer." % (out.stdout.strip(), ref)
         ) from None
 
@@ -247,6 +247,39 @@ def _stage_source(source: Path, staged: Path, output_dir: Path) -> None:
     )
 
 
+_BACKEND_PROBE = (
+    "import importlib.util, os, sys\n"
+    "paths = set()\n"
+    "for name in ('build', 'setuptools'):\n"
+    "    spec = importlib.util.find_spec(name)\n"
+    "    if spec is not None and spec.origin:\n"
+    "        paths.add(os.path.dirname(os.path.dirname(spec.origin)))\n"
+    "sys.stdout.write(os.pathsep.join(sorted(paths)))\n"
+)
+
+
+def _backend_paths(source: Path) -> str:
+    """Where the interpreter running this script finds its build backend.
+
+    The build environment is a virtual environment, and a virtual environment
+    created by another virtual environment sees only the base installation —
+    so a caller that installed the backend into its own environment (the
+    release workflow does exactly that) would otherwise find nothing. The
+    directories are passed through as ``PYTHONPATH`` instead of installing
+    anything: nothing is fetched and nothing outside this process changes.
+    """
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", _BACKEND_PROBE],
+            cwd=str(source),
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return ""
+    return probe.stdout.strip() if probe.returncode == 0 else ""
+
+
 def _build_venv(python: str, directory: Path) -> Path:
     """A temporary virtual environment outside the source tree.
 
@@ -267,9 +300,14 @@ def _build_venv(python: str, directory: Path) -> Path:
     return directory / ("Scripts" if os.name == "nt" else "bin") / "python"
 
 
-def _require_backend(venv_python: Path) -> None:
+def _require_backend(venv_python: Path, backend: str = "") -> None:
+    env = dict(os.environ)
+    env["PYTHONNOUSERSITE"] = "1"
+    if backend:
+        env["PYTHONPATH"] = backend
     probe = subprocess.run(
         [str(venv_python), "-c", "import build, setuptools"],
+        env=env,
         capture_output=True,
         text=True,
     )
@@ -286,10 +324,15 @@ def _require_backend(venv_python: Path) -> None:
 
 
 def _run_build(
-    venv_python: Path, staged: Path, output_dir: Path, epoch: int
+    venv_python: Path, staged: Path, output_dir: Path, epoch: int, backend: str = ""
 ) -> None:
     env = dict(os.environ)
     env["SOURCE_DATE_EPOCH"] = str(epoch)
+    if backend:
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            backend + os.pathsep + existing if existing else backend
+        )
     # A user site-packages tree would make the build depend on the operator's
     # account rather than on the interpreter, and byte-identical rebuilds stop
     # being checkable across machines.
@@ -503,12 +546,13 @@ def build_release_assets(
             raw = work_dir / "raw"
             raw.mkdir()
             _stage_source(source, staged, output_dir)
+            backend = _backend_paths(source)
             venv_python = _build_venv(sys.executable, work_dir / "build-venv")
-            _require_backend(venv_python)
+            _require_backend(venv_python, backend)
             # The backend writes into the temporary directory first: a build
             # that fails must leave the output directory exactly as it was,
             # never a wheel without its sdist and checksums.
-            _run_build(venv_python, staged, raw, resolved_epoch)
+            _run_build(venv_python, staged, raw, resolved_epoch, backend)
             wheel, sdist = _collect_artifacts(raw, name, version)
             _verify_wheel_version(wheel, name, version)
             _normalise_sdist(sdist, resolved_epoch)
