@@ -27,12 +27,13 @@ with one SHA-256 checksum per distribution file. Download the wheel and
 
 ```sh
 sha256sum -c SHA256SUMS
-pip install skillweave_sdk-0.3.1-py3-none-any.whl
+pip install skillweave_sdk-0.3.1-*.whl
 ```
 
 `sha256sum -c SHA256SUMS` must report `OK` before you install. The assets are
 built deterministically from the tagged commit, so the checksum of a given
-release is stable and can be republished.
+release is stable and can be republished. The sdist is published alongside the
+wheel for source installs.
 
 ### From the git tag (fallback)
 
