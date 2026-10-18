@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "catalog_revision": "1",
-  "sdk_version": "0.3.0",
+  "sdk_version": "0.3.1",
   "baseline_commit": "fe6181217eff6044b8f831af3a303a10c6efbb0d",
   "integration_commit": "fe6181217eff6044b8f831af3a303a10c6efbb0d",
   "schema_directory": "src/skillweave_sdk/schemas/execution",

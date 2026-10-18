@@ -25,10 +25,10 @@ __all__ = ["__version__", "SCHEMA_VERSION", "authority_root", "validator"]
 
 #: Distribution version. Kept equal to ``[schema].version`` in
 #: ``schema_version.toml``; a test asserts the two agree.
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 #: Canonical schema version consumers pin against.
-SCHEMA_VERSION = "0.3.0"
+SCHEMA_VERSION = "0.3.1"
 
 
 def authority_root():
