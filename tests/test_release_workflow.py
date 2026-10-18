@@ -162,6 +162,30 @@ def _step(doc: dict, name: str) -> dict:
     return matches[0]
 
 
+def _build_output_dir(doc: dict) -> str:
+    """The directory the build step hands the build script, from the parsed YAML.
+
+    One helper so that "the publish receives the built directory" is anchored
+    to what the build step actually declares, and the two steps cannot be
+    satisfied by two unrelated constants.
+    """
+    match = re.search(r"--output-dir[= ]+(\S+)", _step(doc, BUILD_STEP)["run"])
+    assert match is not None, (
+        "the build step must name the artifact directory via --output-dir"
+    )
+    return match.group(1).strip("'\"")
+
+
+def _assert_publish_takes_directory(doc: dict, directory: str) -> None:
+    publish = _step(doc, PUBLISH_STEP)["run"]
+    call = re.search(r'publish_release\((.*?)\n\s*\)', publish, re.DOTALL)
+    assert call is not None, "the publish step must call publish_release"
+    assert '"%s"' % directory in call.group(1), (
+        "the publish step must receive %r as its artifact directory; got %r"
+        % (directory, call.group(1))
+    )
+
+
 def test_build_step_precedes_the_publish_step(doc: dict) -> None:
     """The assets must be built before the step that attaches them.
 
@@ -188,19 +212,11 @@ def test_build_step_runs_the_build_script_into_an_asset_directory(doc: dict) -> 
         "the build step must run the accepted scripts/build_release_assets.py"
     )
 
-    build_dir = re.search(r"--output-dir[= ]+(\S+)", script)
-    assert build_dir is not None, (
-        "the build step must name the artifact directory via --output-dir"
-    )
-    build_dir = build_dir.group(1).strip("'\"")
-
-    publish = _step(doc, PUBLISH_STEP)["run"]
-    publish_dir = re.search(r'publish_release\((.*?)\)', publish, re.DOTALL)
-    assert publish_dir is not None, "the publish step must call publish_release"
-    assert f'"{build_dir}"' in publish_dir.group(1), (
-        "the publish step must receive the asset directory "
-        f"{build_dir!r} as its artifact directory; got {publish_dir.group(1)!r}"
-    )
+    # The publish assertion is linked to *this* step's output directory, not to
+    # the literal 'release-assets': a fixed string would also be satisfied by a
+    # publish step that names a directory no build step wrote.
+    build_dir = _build_output_dir(doc)
+    _assert_publish_takes_directory(doc, build_dir)
 
 
 def test_build_step_gets_the_tag_being_released(doc: dict) -> None:
@@ -231,12 +247,9 @@ def test_the_whole_asset_contract_holds_together(doc: dict, text: str) -> None:
     names = _step_names(doc)
     assert names.index(BUILD_STEP) < names.index(PUBLISH_STEP)
 
-    assert re.search(
-        r"--output-dir[= ]+\S*release-assets", _step(doc, BUILD_STEP)["run"]
-    ), "the build must write into the release-assets directory"
-    assert '"release-assets"' in _step(doc, PUBLISH_STEP)["run"], (
-        "the publish step must receive the release-assets directory"
-    )
+    build_dir = _build_output_dir(doc)
+    assert build_dir, "the build step must name a non-empty output directory"
+    _assert_publish_takes_directory(doc, build_dir)
 
     used = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", text))
     assert used == ALLOWED_SECRETS, (
@@ -286,12 +299,7 @@ def test_pin_and_committed_destinations_survive_the_asset_upgrade(
     # Non-vacuity: the invariants above are asserted next to the asset wiring,
     # so a workflow that never built an asset cannot pass this test by leaving
     # the pin and the destinations untouched.
-    assert re.search(
-        r"--output-dir[= ]+\S*release-assets", _step(doc, BUILD_STEP)["run"]
-    ), "the build step must write the assets into release-assets"
-    assert '"release-assets"' in _step(doc, PUBLISH_STEP)["run"], (
-        "the publish step must receive the release-assets directory"
-    )
+    _assert_publish_takes_directory(doc, _build_output_dir(doc))
 
 
 def test_destinations_are_read_from_the_committed_ops_yaml(text: str) -> None:
