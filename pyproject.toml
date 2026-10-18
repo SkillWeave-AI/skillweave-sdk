@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skillweave-sdk"
-version = "0.3.0"
+version = "0.3.1"
 description = "Contract authority for SkillWeave: schemas and the taxonomy value set."
 readme = "README.md"
 # PEP 639: SPDX license expression. The setuptools floor above is >=77.0.0
