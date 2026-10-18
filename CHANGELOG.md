@@ -18,8 +18,8 @@
 
 ### Documentation
 
-- Document the install from the release assets. Download the wheel and
-  `SHA256SUMS` from the release page, verify the download with
+- Document the install from the release assets. Download the wheel, the sdist
+  and `SHA256SUMS` from the release page, verify all three with
   `sha256sum -c SHA256SUMS`, then install the wheel with pip. Installing from
   the git tag stays available as a fallback.
 
