@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.2
+
+No change to the SDK, its contracts or its behaviour. The version and the contract schema version move together to 0.3.2.
+
+- The release object is written by the ops-engine on every destination, with the built wheel, the sdist and the `SHA256SUMS` file attached.
+
 ## v0.3.1
 
 ### Features
