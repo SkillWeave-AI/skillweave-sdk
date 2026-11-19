@@ -3,8 +3,9 @@ name: Create Forgejo Release
 # Forgejo is canonical; GitHub (SkillWeave-AI/skillweave-sdk) is the public
 # mirror. This workflow does not write a release object itself: it gates the
 # release title and the release notes, then hands publication to the ops-engine
-# ReleaseHandler, which creates the release on EVERY destination committed in
-# .ops.yaml and reports a partial publication instead of swallowing it.
+# ReleaseHandler via the ops-engine-release-attach entry point, which creates
+# the release on EVERY destination committed in .ops.yaml and reports a partial
+# publication instead of swallowing it.
 #
 # The four things this workflow refuses to do, each answered below:
 #   bare-tag title   -> the title gate, before any release object exists
@@ -193,15 +194,12 @@ jobs:
       # mirrored, so this needs no credential — the same fetch a version gate
       # uses elsewhere.
       #
-      # Pinned to the v3.4.2 tag, the one ref this workflow installs from. An
-      # earlier revision pinned a commit because a mirror tag once pointed behind
-      # the canonical one and delivered the wrong code; ops-engine closed that at
-      # its source, and the tag is a fixed point again, so the pin follows it.
+      # Pinned to the v3.7.0 tag.
       - name: Fetch the audience gate (canonical, ops-engine)
         run: |
           set -euo pipefail
           curl -fsSL \
-            "https://raw.githubusercontent.com/LangeVC/ops-engine/v3.4.2/scripts/release_notes_audience_gate.py" \
+            "https://raw.githubusercontent.com/LangeVC/ops-engine/v3.7.0/scripts/release_notes_audience_gate.py" \
             -o "$RUNNER_TEMP/release_notes_audience_gate.py"
 
           # Prove what arrived. Without this the step reports success even when
@@ -314,20 +312,15 @@ jobs:
           sys.stdout.write("release assets: %s\n" % ", ".join(names))
           ASSET_CHECK_PY
 
-      # The workflow calls the engine to publish; it does not reimplement
-      # publication. ReleaseHandler.publish_release creates the release on EVERY
-      # destination resolved from the committed .ops.yaml and reports a partial
-      # publication rather than swallowing it.
+      # The workflow calls the engine's entry point CLI to publish; it does not
+      # reimplement publication. ops-engine-release-attach finds or creates the
+      # release, converges it, attaches the built files and verifies the declared
+      # asset set on every destination.
       #
-      # Two forges carry two credentials, so the adapter factory is given one
-      # credential per forge value. A destination whose forge has no credential
-      # is a named refusal, never a silent unauthenticated publication. The
-      # webhook secret is empty on both: publication never parses a webhook.
-      #
-      # The assets come from the build step above, which has already refused a
-      # run without them. release-assets is deliberately not created here: an
-      # empty directory would let this step attach nothing and still report
-      # success, which is the failure the build step exists to prevent.
+      # The engine wheel is not available until the engine is released (v3.7.0).
+      # The install line below is correct for the released engine; the owner
+      # merges these branches only after that release, so the line cannot be
+      # tested until then.
       - name: Publish the release to every destination
         env:
           TAG_NAME: "${{ github.event.inputs.tag_name || github.ref_name }}"
@@ -340,141 +333,87 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The engine installs into an isolated venv outside the source tree:
-          # the runner's system interpreter is PEP 668 externally managed, and an
-          # in-tree venv would become part of anything this repository packages.
-          # v3.4.2 is the single pinned ref this workflow installs from.
+          NOTES_FILE="$(mktemp)"
+          trap 'rm -f "$NOTES_FILE"' EXIT
+          printf '%s\n' "$NOTES" > "$NOTES_FILE"
+
+          # The engine installs from the public wheel. This line is correct for
+          # the released v3.7.0 wheel and cannot be tested until that release
+          # exists.
           ENGINE_VENV="$(mktemp -d)/engine-venv"
           python3 -m venv "$ENGINE_VENV"
           "$ENGINE_VENV/bin/python" -m pip install --quiet \
-            "git+https://github.com/LangeVC/ops-engine@v3.4.2"
+            "https://github.com/LangeVC/ops-engine/releases/download/v3.7.0/ops_engine-3.7.0-py3-none-any.whl"
 
-          # Prove what was installed. A silently older engine is the failure
-          # mode this whole step exists to remove.
-          "$ENGINE_VENV/bin/python" - <<'VERSION_GATE_PY'
-          import importlib.metadata as md
-          import sys
+          # Prove what was installed.
+          "$ENGINE_VENV/bin/python" -c "
+import importlib.metadata as md, sys
+REQUIRED = '3.7.0'
+got = md.version('ops-engine')
+if got != REQUIRED:
+    sys.stderr.write('EngineVersionError: installed ops-engine %s, required %s.\n' % (got, REQUIRED))
+    sys.exit(2)
+sys.stdout.write('engine: ops-engine %s\n' % got)
+"
 
-          REQUIRED = "3.4.2"
-          got = md.version("ops-engine")
-          if got != REQUIRED:
-              sys.stderr.write(
-                  "EngineVersionError: installed ops-engine %s, required %s. "
-                  "Refusing to publish with an engine other than the pinned one.\n"
-                  % (got, REQUIRED)
-              )
-              sys.exit(2)
-          from ops_engine.adapters.factory import Credential  # noqa: F401
-          sys.stdout.write("engine: ops-engine %s, per-destination Credential present\n" % got)
-          VERSION_GATE_PY
+          # Build a minimal config.yml from the Layer-3 .ops.yaml destinations.
+          # Each destination carries its credential_variable so the CLI reads
+          # the token from the runner's environment.
+          python3 -c "
+import os, sys
+from pathlib import Path
 
-          "$ENGINE_VENV/bin/python" - <<'PUBLISH_PY'
-          import asyncio
-          import os
-          import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from ops_engine.config_loader import load_ops_yaml, OpsYamlError
 
-          from ops_engine.adapters.factory import Credential, adapters_for
-          from ops_engine.config_loader import (
-              OpsEngineConfig,
-              OpsYamlError,
-              load_ops_yaml,
-          )
-          from ops_engine.modules.release import ReleaseHandler
+try:
+    layer3 = load_ops_yaml('.')
+except OpsYamlError as exc:
+    print(f'::error::OpsYamlError: {exc}', file=sys.stderr)
+    exit(2)
+if layer3 is None:
+    print('::error::MissingOpsYamlError: no .ops.yaml at the repository root.', file=sys.stderr)
+    exit(2)
+dests = layer3.destinations
+if not dests:
+    print('::error::MissingReleaseDestinationsError: .ops.yaml declares no destinations.', file=sys.stderr)
+    exit(2)
 
-          # Destinations come from the committed .ops.yaml at the repository
-          # root. A missing or empty file is a named refusal, never a silently
-          # narrowed release: "no destinations" resolving to a Forgejo-only
-          # publication that reports success is exactly what must not ship.
-          try:
-              layer3 = load_ops_yaml(".")
-          except OpsYamlError as exc:
-              print(f"::error::OpsYamlError: {exc}", file=sys.stderr)
-              sys.exit(2)
+org, _, repo_name = os.environ['FORGEJO_REPOSITORY'].partition('/')
 
-          if layer3 is None:
-              print(
-                  "::error::MissingOpsYamlError: no .ops.yaml at the repository "
-                  "root; the release destination is a committed file, not a CI "
-                  "variable. Refusing to publish with no declared destinations.",
-                  file=sys.stderr,
-              )
-              sys.exit(2)
+_CREDENTIAL_VARS = {'forgejo': 'FORGEJO_TOKEN', 'github': 'GH_MIRROR_TOKEN'}
 
-          destinations = layer3.destinations
-          if not destinations:
-              print(
-                  "::error::MissingReleaseDestinationsError: .ops.yaml declares "
-                  "no destinations; refusing to publish to zero forges rather "
-                  "than silently narrowing the release.",
-                  file=sys.stderr,
-              )
-              sys.exit(2)
+dest_list = []
+for d in dests:
+    entry = {'forge': d.forge, 'repo': d.repo, 'role': d.role, 'visibility': d.visibility}
+    var = _CREDENTIAL_VARS.get(d.forge.strip().lower())
+    if var:
+        entry['credential_variable'] = var
+    dest_list.append(entry)
 
-          repo = os.environ["FORGEJO_REPOSITORY"]
-          tag_name = os.environ["TAG_NAME"]
-          release_notes = os.environ["NOTES"]
-          name_template = os.environ["NAME_TEMPLATE"]
-          forgejo_base_url = os.environ["FORGEJO_BASE_URL"]
+config = {
+    'orgs': {
+        org: {
+            'repositories': {
+                repo_name: {
+                    'destinations': dest_list
+                }
+            }
+        }
+    }
+}
+config_path = Path(os.environ['RUNNER_TEMP']) / 'release-config.yml'
+with open(config_path, 'w') as fh:
+    import yaml
+    yaml.dump(config, fh, default_flow_style=False)
+print(f'config written to {config_path}', file=sys.stderr)
+"
 
-          # Materialise the Layer-3 destinations into a typed Layer-2 config so
-          # that publish_release's internal resolve_destinations re-resolves the
-          # same list.
-          org, _, repo_name = repo.partition("/")
-          config = OpsEngineConfig.load(
-              {
-                  "orgs": {
-                      org: {
-                          "repositories": {
-                              repo_name: {
-                                  "destinations": [
-                                      {
-                                          "forge": d.forge,
-                                          "repo": d.repo,
-                                          "role": d.role,
-                                          "visibility": d.visibility,
-                                      }
-                                      for d in destinations
-                                  ]
-                              }
-                          }
-                      }
-                  }
-              }
-          )
-
-          credentials = {
-              "forgejo": Credential(token=os.environ["FORGEJO_TOKEN"]),
-              "github": Credential(token=os.environ["GH_MIRROR_TOKEN"]),
-          }
-          adapters = adapters_for(
-              destinations,
-              credentials=credentials,
-              base_url=forgejo_base_url,
-          )
-
-          async def main():
-              report = await ReleaseHandler.publish_release(
-                  config,
-                  repo,
-                  tag_name,
-                  release_notes,
-                  "release-assets",
-                  name_template=name_template,
-                  adapters=adapters,
-              )
-
-              published = ", ".join(report.published) or "(none)"
-              failed = ", ".join(report.failed) or "(none)"
-              print(f"published destinations: {published}")
-              print(f"failed destinations:    {failed}")
-              if report.failed:
-                  # A partial publication is a reported failure, never a silent
-                  # success: the run goes red so the operator sees the drift.
-                  print(
-                      "::error::PartialPublicationError: the release was not "
-                      "published to every destination; failed: " + failed
-                  )
-                  sys.exit(1)
-
-          asyncio.run(main())
-          PUBLISH_PY
+          "$ENGINE_VENV/bin/python" -m ops_engine.release_attach \
+            --config "$RUNNER_TEMP/release-config.yml" \
+            --repo "$FORGEJO_REPOSITORY" \
+            --tag "$TAG_NAME" \
+            --artifacts release-assets \
+            --repo-dir . \
+            --name-template "$NAME_TEMPLATE" \
+            --notes-file "$NOTES_FILE"
