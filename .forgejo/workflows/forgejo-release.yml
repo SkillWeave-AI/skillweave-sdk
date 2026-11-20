@@ -2,10 +2,10 @@ name: Create Forgejo Release
 
 # Forgejo is canonical; GitHub (SkillWeave-AI/skillweave-sdk) is the public
 # mirror. This workflow does not write a release object itself: it gates the
-# release title and the release notes, then hands publication to the ops-engine
-# ReleaseHandler via the ops-engine-release-attach entry point, which creates
-# the release on EVERY destination committed in .ops.yaml and reports a partial
-# publication instead of swallowing it.
+# release title and the release notes, then hands publication to the
+# ops-engine-release-attach entry point, which creates the release on EVERY
+# destination committed in .ops.yaml and reports a partial publication instead
+# of swallowing it.
 #
 # The four things this workflow refuses to do, each answered below:
 #   bare-tag title   -> the title gate, before any release object exists
@@ -345,69 +345,92 @@ jobs:
           "$ENGINE_VENV/bin/python" -m pip install --quiet \
             "https://github.com/LangeVC/ops-engine/releases/download/v3.7.0/ops_engine-3.7.0-py3-none-any.whl"
 
-          # Prove what was installed.
-          "$ENGINE_VENV/bin/python" -c "
-import importlib.metadata as md, sys
-REQUIRED = '3.7.0'
-got = md.version('ops-engine')
-if got != REQUIRED:
-    sys.stderr.write('EngineVersionError: installed ops-engine %s, required %s.\n' % (got, REQUIRED))
-    sys.exit(2)
-sys.stdout.write('engine: ops-engine %s\n' % got)
-"
+          # Prove what was installed. The version is read back from the same
+          # interpreter that runs the CLI below, so a wheel that installed but
+          # left a stale version behind is named here rather than at publication.
+          "$ENGINE_VENV/bin/python" - <<'ENGINE_VERSION_PY'
+          import importlib.metadata as md
+          import sys
+
+          REQUIRED = "3.7.0"
+          got = md.version("ops-engine")
+          if got != REQUIRED:
+              sys.stderr.write(
+                  "EngineVersionError: installed ops-engine %s, required %s.\n"
+                  % (got, REQUIRED)
+              )
+              sys.exit(2)
+          sys.stdout.write("engine: ops-engine %s\n" % got)
+          ENGINE_VERSION_PY
 
           # Build a minimal config.yml from the Layer-3 .ops.yaml destinations.
           # Each destination carries its credential_variable so the CLI reads
           # the token from the runner's environment.
-          python3 -c "
-import os, sys
-from pathlib import Path
+          #
+          # This runs in the engine venv, which holds ops_engine and PyYAML:
+          # the checkout's src/ is never put on the path, because a `python -`
+          # script has no `__file__` to derive it from and the installed wheel
+          # is the only engine this run may use.
+          "$ENGINE_VENV/bin/python" - <<'CONFIG_PY'
+          import os
+          import sys
+          from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-from ops_engine.config_loader import load_ops_yaml, OpsYamlError
+          import yaml
 
-try:
-    layer3 = load_ops_yaml('.')
-except OpsYamlError as exc:
-    print(f'::error::OpsYamlError: {exc}', file=sys.stderr)
-    exit(2)
-if layer3 is None:
-    print('::error::MissingOpsYamlError: no .ops.yaml at the repository root.', file=sys.stderr)
-    exit(2)
-dests = layer3.destinations
-if not dests:
-    print('::error::MissingReleaseDestinationsError: .ops.yaml declares no destinations.', file=sys.stderr)
-    exit(2)
+          from ops_engine.config_loader import OpsYamlError, load_ops_yaml
 
-org, _, repo_name = os.environ['FORGEJO_REPOSITORY'].partition('/')
+          try:
+              layer3 = load_ops_yaml(".")
+          except OpsYamlError as exc:
+              print(f"::error::OpsYamlError: {exc}", file=sys.stderr)
+              sys.exit(2)
+          if layer3 is None:
+              print(
+                  "::error::MissingOpsYamlError: no .ops.yaml at the "
+                  "repository root.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+          dests = layer3.destinations
+          if not dests:
+              print(
+                  "::error::MissingReleaseDestinationsError: .ops.yaml "
+                  "declares no destinations.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
 
-_CREDENTIAL_VARS = {'forgejo': 'FORGEJO_TOKEN', 'github': 'GH_MIRROR_TOKEN'}
+          org, _, repo_name = os.environ["FORGEJO_REPOSITORY"].partition("/")
 
-dest_list = []
-for d in dests:
-    entry = {'forge': d.forge, 'repo': d.repo, 'role': d.role, 'visibility': d.visibility}
-    var = _CREDENTIAL_VARS.get(d.forge.strip().lower())
-    if var:
-        entry['credential_variable'] = var
-    dest_list.append(entry)
+          # The credential variable each forge's destination reads. Declaring
+          # it here, next to the token the runner exports, is what lets the CLI
+          # resolve a per-destination credential without a second config file.
+          CREDENTIAL_VARS = {"forgejo": "FORGEJO_TOKEN", "github": "GH_MIRROR_TOKEN"}
 
-config = {
-    'orgs': {
-        org: {
-            'repositories': {
-                repo_name: {
-                    'destinations': dest_list
-                }
-            }
-        }
-    }
-}
-config_path = Path(os.environ['RUNNER_TEMP']) / 'release-config.yml'
-with open(config_path, 'w') as fh:
-    import yaml
-    yaml.dump(config, fh, default_flow_style=False)
-print(f'config written to {config_path}', file=sys.stderr)
-"
+          dest_list = []
+          for d in dests:
+              entry = {
+                  "forge": d.forge,
+                  "repo": d.repo,
+                  "role": d.role,
+                  "visibility": d.visibility,
+              }
+              var = CREDENTIAL_VARS.get(d.forge.strip().lower())
+              if var:
+                  entry["credential_variable"] = var
+              dest_list.append(entry)
+
+          config = {
+              "orgs": {
+                  org: {"repositories": {repo_name: {"destinations": dest_list}}}
+              }
+          }
+          config_path = Path(os.environ["RUNNER_TEMP"]) / "release-config.yml"
+          with open(config_path, "w", encoding="utf-8") as fh:
+              yaml.dump(config, fh, default_flow_style=False)
+          print(f"config written to {config_path}", file=sys.stderr)
+          CONFIG_PY
 
           "$ENGINE_VENV/bin/python" -m ops_engine.release_attach \
             --config "$RUNNER_TEMP/release-config.yml" \

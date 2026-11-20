@@ -2,24 +2,30 @@
 
 ``.forgejo/workflows/forgejo-release.yml`` is the release path for this
 repository: a tag push (or a manual dispatch) gates the title and the notes,
-builds the release assets, then publishes through the ops-engine ReleaseHandler
-to every destination in ``.ops.yaml``. This test pins the invariants that path
-must not drift on, each of which has been the shape of a real failure elsewhere
-in the estate:
+builds the release assets, then hands publication to the ops-engine entry point
+(``ops-engine.release_attach``) for every destination in ``.ops.yaml``. This
+test pins the invariants that path must not drift on, each of which has been
+the shape of a real failure elsewhere in the estate:
 
 1. **Trigger** — a ``v*.*.*`` tag push and a ``workflow_dispatch`` carrying a
    ``tag_name`` input. A release must be reachable both automatically and by an
    operator re-run after a partial publication.
 2. **Assets** — ``scripts/build_release_assets.py`` runs *before* the publish
    step and the directory it writes is the directory the publish step hands to
-   the engine. A release that builds nothing, or builds somewhere the publish
-   never looks, attaches nothing and still reports success.
-3. **Engine ref** — the single pinned ref ``v3.4.2``. A bare or floating install
-   is the failure mode an unnoticed engine downgrade produces; the pin is a
-   fixed point, so it must appear verbatim.
+   the entry point. A release that builds nothing, or builds somewhere the
+   publish never looks, attaches nothing and still reports success.
+3. **Engine ref** — one pinned ref, ``v3.7.0``, for both the wheel the entry
+   point is installed from and the audience gate fetched beside it. A bare or
+   floating install is the failure mode an unnoticed engine downgrade
+   produces; installing an engine other than the one that publishes would gate
+   the notes with a different engine than the one that attaches the assets.
 4. **Secrets** — exactly ``GITHUB_TOKEN`` (the Forgejo token) and
    ``GH_MIRROR_TOKEN`` (the GitHub mirror token). Nothing else.
 5. **No ``vars.*``** — the destinations are a committed file, not a CI variable.
+6. **No release-object writer** — this workflow never creates or edits a
+   release itself; publication is the engine's entry point, and the PRD's
+   "the engine publish call that raced the layover is removed" means the
+   workflow calls the CLI rather than importing ``ReleaseHandler`` inline.
 
 The YAML is parsed (not merely grepped): a workflow that does not parse never
 runs, and a text-only check would pass a file the runner would reject. Reading
@@ -37,9 +43,9 @@ yaml = pytest.importorskip("yaml")
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".forgejo" / "workflows" / "forgejo-release.yml"
 
-# The one ref this workflow installs the engine from, and the two secrets the
-# publication is allowed to read.
-ENGINE_REF = "v3.4.2"
+# The one ref this workflow installs the engine from, fetches the audience gate
+# from, and the two secrets the publication is allowed to read.
+ENGINE_REF = "v3.7.0"
 ALLOWED_SECRETS = {"GITHUB_TOKEN", "GH_MIRROR_TOKEN"}
 
 BUILD_STEP = "Build the release assets"
@@ -67,6 +73,13 @@ def _triggers(doc: dict) -> dict:
         if key in doc:
             return doc[key]
     raise AssertionError(f"workflow has no 'on:' trigger block; keys: {list(doc)}")
+
+
+def _engine_refs(text: str) -> set[str]:
+    """Every engine ref named: the wheel download and the audience-gate URL."""
+    refs = set(re.findall(r"releases/download/(v[0-9][0-9.]*)/ops_engine-", text))
+    refs |= set(re.findall(r"ops-engine/(v[0-9][0-9.]*)/", text))
+    return refs
 
 
 def test_workflow_parses_as_yaml(doc: dict) -> None:
@@ -99,15 +112,21 @@ def test_workflow_dispatch_takes_tag_name(doc: dict) -> None:
 
 
 def test_engine_is_pinned_to_the_exact_ref(text: str) -> None:
-    refs = set(re.findall(r"ops-engine@(v[0-9][0-9.]*)", text))
+    refs = _engine_refs(text)
     assert refs == {ENGINE_REF}, (
         f"the engine must be installed from {ENGINE_REF!r} and nothing else; "
-        f"found install refs {sorted(refs)}"
+        f"found refs {sorted(refs) or '(none)'}"
     )
     # The pinned ref, not a commit or a branch: a floating or bare install is
     # the drift this pins down.
-    assert "git+https://github.com/LangeVC/ops-engine@v3.4.2" in text
+    assert (
+        f"https://github.com/LangeVC/ops-engine/releases/download/"
+        f"{ENGINE_REF}/ops_engine-3.7.0-py3-none-any.whl" in text
+    ), "the entry point must be installed from the pinned wheel URL"
     assert "ops-engine==" not in text, "no PyPI (unpinned-index) install allowed"
+    assert "git+https://" not in text, (
+        "the engine must install from the released wheel, not a VCS ref"
+    )
     assert "/main" not in text and "@HEAD" not in text, "no floating ref allowed"
 
 
@@ -177,12 +196,23 @@ def _build_output_dir(doc: dict) -> str:
 
 
 def _assert_publish_takes_directory(doc: dict, directory: str) -> None:
+    """The publish step hands the built directory to the engine's entry point.
+
+    The CLI's contract is ``--artifacts <dir>``: it reads the files from that
+    directory and attaches them. Asserting the flag, rather than a literal
+    ``publish_release(`` call, is what makes this test track the REA-015
+    entry point instead of the in-workflow publish call REA-040 removes.
+    """
     publish = _step(doc, PUBLISH_STEP)["run"]
-    call = re.search(r'publish_release\((.*?)\n\s*\)', publish, re.DOTALL)
-    assert call is not None, "the publish step must call publish_release"
-    assert '"%s"' % directory in call.group(1), (
+    match = re.search(r"--artifacts[= ]+(\S+)", publish)
+    assert match is not None, (
+        "the publish step must pass the artifact directory to the engine via "
+        "--artifacts"
+    )
+    got = match.group(1).strip("'\"")
+    assert got == directory, (
         "the publish step must receive %r as its artifact directory; got %r"
-        % (directory, call.group(1))
+        % (directory, got)
     )
 
 
@@ -213,8 +243,8 @@ def test_build_step_runs_the_build_script_into_an_asset_directory(doc: dict) -> 
     )
 
     # The publish assertion is linked to *this* step's output directory, not to
-    # the literal 'release-assets': a fixed string would also be satisfied by a
-    # publish step that names a directory no build step wrote.
+    # a fixed string: a fixed string would also be satisfied by a publish step
+    # that names a directory no build step wrote.
     build_dir = _build_output_dir(doc)
     _assert_publish_takes_directory(doc, build_dir)
 
@@ -235,8 +265,41 @@ def test_build_step_gets_the_tag_being_released(doc: dict) -> None:
     )
 
 
+def test_publish_step_calls_the_engine_entry_point(text: str) -> None:
+    """Publication goes through REA-015, not an in-workflow publish call.
+
+    The entry point is the module ``ops_engine.release_attach``; invoking it
+    (``-m`` or the console script) is what makes the workflow a caller. The
+    in-process ``ReleaseHandler.publish_release`` call is the shape REA-040
+    removes, so neither the handler name nor a direct import may appear.
+    """
+    assert "ops_engine.release_attach" in text, (
+        "the publish step must call the ops-engine release attach entry point"
+    )
+    assert "--artifacts" in text, "the entry point takes the built directory"
+    assert "--repo-dir" in text, (
+        "the entry point must receive --repo-dir so it merges the Layer-3 "
+        ".ops.yaml and verifies the declared assets"
+    )
+    assert "ReleaseHandler" not in text, (
+        "the workflow must not import the engine's release handler; the entry "
+        "point is the only publication path"
+    )
+    assert "publish_release" not in text, (
+        "the in-workflow publish call that raced the layover is removed"
+    )
+
+
+def test_destinations_are_read_from_the_committed_ops_yaml(text: str) -> None:
+    assert "load_ops_yaml" in text, (
+        "destinations must be resolved from .ops.yaml via load_ops_yaml, not "
+        "restated as literals"
+    )
+    assert ".ops.yaml" in text, "the workflow must name the committed .ops.yaml"
+
+
 def test_the_whole_asset_contract_holds_together(doc: dict, text: str) -> None:
-    """Criterion 2 in one place: the new contract, and nothing weakened.
+    """The asset contract in one place, and nothing weakened.
 
     Every clause is asserted here so that a change weakening one of them turns
     this test red rather than passing through a gap between narrower tests:
@@ -277,18 +340,18 @@ def test_the_whole_asset_contract_holds_together(doc: dict, text: str) -> None:
 def test_pin_and_committed_destinations_survive_the_asset_upgrade(
     doc: dict, text: str
 ) -> None:
-    """Criterion 3: the asset work changes neither the pin nor the destination source.
+    """The asset work changes neither the pin nor the destination source.
 
-    The engine is installed from exactly one ref, ``v3.4.2``, and the
-    destinations still come from the committed ``.ops.yaml``. Both are asserted
-    against the changed workflow, together with the asset directory the build
-    step produces, so this test is red on the workflow that has no build step
-    and red again if the pin or the ``.ops.yaml`` read is ever touched.
+    The engine comes from exactly one ref, ``v3.7.0``, and the destinations
+    still come from the committed ``.ops.yaml``. Both are asserted against the
+    changed workflow, together with the asset directory the build step
+    produces, so this test is red on the workflow that has no build step and
+    red again if the pin or the ``.ops.yaml`` read is ever touched.
     """
-    refs = set(re.findall(r"ops-engine@(v[0-9][0-9.]*)", text))
+    refs = _engine_refs(text)
     assert refs == {ENGINE_REF}, (
         f"the engine must be installed from exactly {ENGINE_REF!r}; "
-        f"found {sorted(refs)}"
+        f"found {sorted(refs) or '(none)'}"
     )
     assert "ops-engine==" not in text, "no PyPI (unpinned-index) install allowed"
     assert "load_ops_yaml" in text, (
@@ -300,14 +363,3 @@ def test_pin_and_committed_destinations_survive_the_asset_upgrade(
     # so a workflow that never built an asset cannot pass this test by leaving
     # the pin and the destinations untouched.
     _assert_publish_takes_directory(doc, _build_output_dir(doc))
-
-
-def test_destinations_are_read_from_the_committed_ops_yaml(text: str) -> None:
-    assert "load_ops_yaml" in text, (
-        "destinations must be resolved from .ops.yaml via load_ops_yaml, not "
-        "restated as literals"
-    )
-    assert ".ops.yaml" in text, "the workflow must name the committed .ops.yaml"
-    assert "publish_release" in text, (
-        "publication must go through the engine's ReleaseHandler.publish_release"
-    )
