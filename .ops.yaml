@@ -1,15 +1,22 @@
 # Layer-3 repository override: the mirror destinations for this repository.
 # The mirror workflow reads this file; no forge repository is restated as a
 # literal in .forgejo/. The forge is a value, not a key name.
+#
+# credential_variable names the environment variable the release workflow
+# exports for that destination. The entry point reads the token by exactly this
+# name, so the declaration and the runner's env cannot drift apart: without it
+# the destination would look for a variable named after the forge.
 destinations:
   - forge: forgejo
     repo: skillweave/skillweave-sdk
     role: release
     visibility: public
+    credential_variable: FORGEJO_TOKEN
   - forge: github
     repo: SkillWeave-AI/skillweave-sdk
     role: release
     visibility: public
+    credential_variable: GH_MIRROR_TOKEN
 
 # REA-040: the files this repository's release must carry. The build step in
 # .forgejo/workflows/forgejo-release.yml produces exactly these three names into

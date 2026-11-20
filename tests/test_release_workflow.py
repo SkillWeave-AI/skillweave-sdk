@@ -291,11 +291,25 @@ def test_publish_step_calls_the_engine_entry_point(text: str) -> None:
 
 
 def test_destinations_are_read_from_the_committed_ops_yaml(text: str) -> None:
-    assert "load_ops_yaml" in text, (
-        "destinations must be resolved from .ops.yaml via load_ops_yaml, not "
-        "restated as literals"
+    """The entry point reads .ops.yaml; the workflow ships no config copy.
+
+    ``--config`` is optional and is what makes this true: without it the entry
+    point resolves the destinations, the release block and ``release.assets``
+    from the ``.ops.yaml`` in ``--repo-dir``. Passing a generated config would
+    publish from a second declaration that drifts from the layover's release
+    block, so the workflow must not pass one — and must not write one either.
+    """
+    assert "--repo-dir" in text, (
+        "the workflow must pass --repo-dir so the entry point reads the "
+        "committed .ops.yaml"
     )
     assert ".ops.yaml" in text, "the workflow must name the committed .ops.yaml"
+    for marker in ("--config", "OPS_ENGINE_CONFIG", "release-config", "config.yml"):
+        assert marker not in text, (
+            f"the workflow must not reference {marker!r}: without --config the "
+            "entry point reads the committed .ops.yaml, and a generated config "
+            "would drift from the layover's release block"
+        )
 
 
 def test_the_whole_asset_contract_holds_together(doc: dict, text: str) -> None:
@@ -354,10 +368,14 @@ def test_pin_and_committed_destinations_survive_the_asset_upgrade(
         f"found {sorted(refs) or '(none)'}"
     )
     assert "ops-engine==" not in text, "no PyPI (unpinned-index) install allowed"
-    assert "load_ops_yaml" in text, (
-        "destinations must still be resolved from .ops.yaml via load_ops_yaml"
+    assert "--repo-dir" in text, (
+        "destinations must still be resolved from the committed .ops.yaml via "
+        "--repo-dir, with no --config copy"
     )
     assert ".ops.yaml" in text, "the workflow must still name the committed .ops.yaml"
+    assert "--config" not in text, (
+        "the workflow must not pass --config: the entry point reads .ops.yaml"
+    )
 
     # Non-vacuity: the invariants above are asserted next to the asset wiring,
     # so a workflow that never built an asset cannot pass this test by leaving
