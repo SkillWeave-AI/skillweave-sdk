@@ -194,7 +194,7 @@ jobs:
       # mirrored, so this needs no credential — the same fetch a version gate
       # uses elsewhere.
       #
-      # Pinned to the v3.7.0 tag.
+      # Pinned to the v3.7.1 tag.
       - name: Fetch the audience gate (canonical, ops-engine)
         run: |
           set -euo pipefail
@@ -203,7 +203,7 @@ jobs:
           # fetched into the same layout the engine repository has.
           GATE_ROOT="$RUNNER_TEMP/audience-gate"
           mkdir -p "$GATE_ROOT/scripts" "$GATE_ROOT/src/ops_engine/modules"
-          BASE="https://raw.githubusercontent.com/LangeVC/ops-engine/v3.7.0"
+          BASE="https://raw.githubusercontent.com/LangeVC/ops-engine/v3.7.1"
           curl -fsSL "$BASE/scripts/release_notes_audience_gate.py" \
             -o "$GATE_ROOT/scripts/release_notes_audience_gate.py"
           curl -fsSL "$BASE/src/ops_engine/modules/release_gates.py" \
@@ -352,7 +352,7 @@ jobs:
           ENGINE_VENV="$(mktemp -d)/engine-venv"
           python3 -m venv "$ENGINE_VENV"
           "$ENGINE_VENV/bin/python" -m pip install --quiet \
-            "https://github.com/LangeVC/ops-engine/releases/download/v3.7.0/ops_engine-3.7.0-py3-none-any.whl"
+            "https://github.com/LangeVC/ops-engine/releases/download/v3.7.1/ops_engine-3.7.1-py3-none-any.whl"
 
           # Prove what was installed. The version is read back from the same
           # interpreter that runs the CLI below, so a wheel that installed but
@@ -361,7 +361,7 @@ jobs:
           import importlib.metadata as md
           import sys
 
-          REQUIRED = "3.7.0"
+          REQUIRED = "3.7.1"
           got = md.version("ops-engine")
           if got != REQUIRED:
               sys.stderr.write(
